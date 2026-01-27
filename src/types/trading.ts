@@ -57,3 +57,8 @@ export interface Strategy {
   accuracy: number;
   isActive: boolean;
 }
+
+export interface PairStats {
+  wins: number;
+  losses: number;
+}

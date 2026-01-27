@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
-import { Signal, TradingStats, ActivityLog, CurrencyPair, TelegramConfig, SignalDirection } from '@/types/trading';
+import { Signal, TradingStats, ActivityLog, CurrencyPair, TelegramConfig, SignalDirection, PairStats } from '@/types/trading';
 import { tradingStrategies } from '@/data/strategies';
 
 const generateId = () => Math.random().toString(36).substr(2, 9);
@@ -17,6 +17,7 @@ export const useTradingBot = (activePairs: CurrencyPair[], telegramConfig: Teleg
     totalSignals: 0,
     activeSignals: 0,
   });
+  const [pairStats, setPairStats] = useState<Map<string, PairStats>>(new Map());
   const [activityLog, setActivityLog] = useState<ActivityLog[]>([]);
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
   const mtgStateRef = useRef<Map<string, { step: number; lastDirection: SignalDirection }>>(new Map());
@@ -31,38 +32,73 @@ export const useTradingBot = (activePairs: CurrencyPair[], telegramConfig: Teleg
     setActivityLog(prev => [log, ...prev].slice(0, 100));
   }, []);
 
-  const sendToTelegram = useCallback(async (signal: Signal, isResult: boolean = false) => {
+  const formatDate = (date: Date) => {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    const hours = String(date.getHours()).padStart(2, '0');
+    const minutes = String(date.getMinutes()).padStart(2, '0');
+    const seconds = String(date.getSeconds()).padStart(2, '0');
+    return `${year}.${month}.${day} ${hours}:${minutes}:${seconds}`;
+  };
+
+  const generateChartCaption = (signal: Signal) => {
+    return `${signal.pair} - ${signal.direction}`;
+  };
+
+  const sendToTelegram = useCallback(async (signal: Signal, isResult: boolean = false, currentPairStats?: PairStats) => {
     if (!telegramConfig.isEnabled || !telegramConfig.botToken || !telegramConfig.chatId) return;
 
-    const emoji = signal.direction === 'CALL' ? '🟢' : '🔴';
+    const directionEmoji = signal.direction === 'CALL' ? '🟢' : '🔴';
     const time = new Date(signal.entryTime).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+    const marketType = signal.pair.includes('OTC') ? '(OTC)' : '';
+    const pairName = signal.pair.replace(' (OTC)', '').replace('-OTC', '');
+    const displayPair = `${pairName} ${marketType}`.trim();
+    
+    // Generate a simulated price
+    const basePrice = 1.0 + Math.random() * 50;
+    const price = basePrice.toFixed(4);
     
     let message = '';
     if (!isResult) {
-      message = `🚀 *BD TRADER PRO AUTO BOT* 🚀
+      const pStats = currentPairStats || { wins: 0, losses: 0 };
+      const pairWinRate = (pStats.wins + pStats.losses) > 0 
+        ? Math.round((pStats.wins / (pStats.wins + pStats.losses)) * 100) 
+        : 0;
+      
+      message = `🏆 ==== SINALS DE ==== 🏆
 
-┌──────────────────────┐
-│ 💎 PAIR         ➪ ${signal.pair}
-│ 📊 TIMEFRAME    ➪ M1
-│ 📈 ACTION       ➪ ${signal.direction} ${emoji}
-│ ⏰ ENTRY TIME   ➪ ${time}
-└──────────────────────┘
+🌐 ${displayPair}
+⏰ ${time}
+⏱ M1
+${directionEmoji} ${signal.direction}
+💋 ${price}
 
-📊 CONFIDENCE : ${signal.confidence}% 🔥
-⚙️ STRATEGY : ${signal.strategy}
-⚙️ STATUS : Waiting for Entry...`;
+🎰 Current Pair: ${pStats.wins}x${pStats.losses} ·◈· (${pairWinRate}%)
+🇲🇴 Signal : ${formatDate(signal.entryTime)}`;
+
     } else {
-      const resultEmoji = signal.status === 'win' ? '✅' : signal.status === 'mtg' ? '🔄' : '❌';
+      const resultEmoji = signal.status === 'win' ? '✅✅✅' : signal.status === 'mtg' ? '🔄✅✅' : '❌❌❌';
       const resultText = signal.status === 'win' ? 'WIN' : signal.status === 'mtg' ? 'MTG WIN' : 'LOSS';
       
-      message = `${resultEmoji} *${resultText}* ${resultEmoji}
+      const totalWins = stats.wins + stats.mtgWins;
+      const totalDecided = totalWins + stats.losses;
+      const overallWinRate = totalDecided > 0 ? Math.round((totalWins / totalDecided) * 100) : 0;
+      
+      const pStats = currentPairStats || { wins: 0, losses: 0 };
+      const pairWinRate = (pStats.wins + pStats.losses) > 0 
+        ? Math.round((pStats.wins / (pStats.wins + pStats.losses)) * 100) 
+        : 0;
+      
+      message = `=========== RESULT ============
 
-💎 ${signal.pair}
-📈 ${signal.direction} ${emoji}
+🏆 ${displayPair}
 ⏰ ${time}
 
-${signal.status === 'mtg' ? `🔄 MTG Step: ${signal.mtgStep}/3` : ''}
-🔥 Win Rate: ${stats.winRate.toFixed(1)}%`;
+${resultEmoji} ${resultText}
+${signal.status === 'mtg' ? `🔄 MTG Step: ${signal.mtgStep}/3\n` : ''}
+🎰 Win: ${totalWins} | Loss: ${stats.losses} (${overallWinRate}%)
+🇲🇴 Esse par: ${pStats.wins}x${pStats.losses} (${pairWinRate}%)`;
     }
 
     try {
@@ -81,7 +117,7 @@ ${signal.status === 'mtg' ? `🔄 MTG Step: ${signal.mtgStep}/3` : ''}
     } catch (error) {
       addLog('error', `Failed to send Telegram message: ${error}`);
     }
-  }, [telegramConfig, stats.winRate, addLog]);
+  }, [telegramConfig, stats, addLog]);
 
   const analyzeMarket = useCallback((pair: CurrencyPair): { direction: SignalDirection; confidence: number; strategy: string } | null => {
     // Simulated technical analysis with high accuracy
@@ -217,8 +253,11 @@ ${signal.status === 'mtg' ? `🔄 MTG Step: ${signal.mtgStep}/3` : ''}
     addLog('signal', `Signal Generated: ${pair.symbol} ${analysis.direction} (${analysis.confidence}%)`);
     addLog('info', `Based on ${analysis.strategy}`);
 
+    // Get current pair stats for telegram
+    const currentPairStats = pairStats.get(pair.symbol) || { wins: 0, losses: 0 };
+
     // Send to Telegram
-    sendToTelegram(signal);
+    sendToTelegram(signal, false, currentPairStats);
 
     // Simulate result after 60 seconds
     setTimeout(() => resolveSignal(signal), 60000);
@@ -228,12 +267,15 @@ ${signal.status === 'mtg' ? `🔄 MTG Step: ${signal.mtgStep}/3` : ''}
       totalSignals: prev.totalSignals + 1,
       activeSignals: prev.activeSignals + 1,
     }));
-  }, [activePairs, analyzeMarket, addLog, sendToTelegram]);
+  }, [activePairs, analyzeMarket, addLog, sendToTelegram, pairStats]);
 
   const resolveSignal = useCallback((signal: Signal) => {
     // High win rate simulation (90-95%)
     const winProbability = signal.confidence / 100;
     const isWin = Math.random() < winProbability;
+
+    let resolvedSignal: Signal | null = null;
+    let newPairStats: PairStats | null = null;
 
     setSignals(prev => prev.map(s => {
       if (s.id === signal.id) {
@@ -255,7 +297,22 @@ ${signal.status === 'mtg' ? `🔄 MTG Step: ${signal.mtgStep}/3` : ''}
           mtgStateRef.current.delete(signal.pair);
         }
 
-        const resolvedSignal = { ...s, status: newStatus };
+        resolvedSignal = { ...s, status: newStatus };
+
+        // Update pair stats
+        setPairStats(prev => {
+          const updated = new Map(prev);
+          const current = updated.get(signal.pair) || { wins: 0, losses: 0 };
+          
+          if (newStatus === 'win' || newStatus === 'mtg') {
+            newPairStats = { wins: current.wins + 1, losses: current.losses };
+          } else {
+            newPairStats = { wins: current.wins, losses: current.losses + 1 };
+          }
+          
+          updated.set(signal.pair, newPairStats);
+          return updated;
+        });
         
         // Update stats
         setStats(prev => {
@@ -283,14 +340,21 @@ ${signal.status === 'mtg' ? `🔄 MTG Step: ${signal.mtgStep}/3` : ''}
           addLog('loss', `LOSS: ${signal.pair}`);
         }
 
-        // Send result to Telegram
-        sendToTelegram(resolvedSignal, true);
-
         return resolvedSignal;
       }
       return s;
     }));
-  }, [addLog, sendToTelegram]);
+
+    // Send result to Telegram after state updates
+    setTimeout(() => {
+      if (resolvedSignal) {
+        const currentPairStats = pairStats.get(signal.pair) || { wins: 0, losses: 0 };
+        // Adjust for the update we just made
+        const adjustedStats = newPairStats || currentPairStats;
+        sendToTelegram(resolvedSignal, true, adjustedStats);
+      }
+    }, 100);
+  }, [addLog, sendToTelegram, pairStats]);
 
   const startBot = useCallback(() => {
     if (isRunning) return;

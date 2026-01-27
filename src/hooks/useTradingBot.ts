@@ -85,6 +85,7 @@ ${directionEmoji} ${signal.direction}
           direction: signal.direction,
           price,
           time,
+          entryTime: new Date(signal.entryTime),
         });
         
         const base64Image = await blobToBase64(chartBlob);
@@ -266,11 +267,14 @@ ${signal.status === 'mtg' ? `🔄 MTG Step: ${signal.mtgStep}/3\n` : ''}
       addLog('mtg', `MTG Step ${mtgStep}/3 for ${pair.symbol}`);
     }
 
+    // Entry time is 1 minute from now (signal sent 1 minute before trade)
+    const entryTime = new Date(Date.now() + 60000);
+    
     const signal: Signal = {
       id: generateId(),
       pair: pair.symbol,
       direction: analysis.direction,
-      entryTime: new Date(),
+      entryTime: entryTime,
       confidence: analysis.confidence,
       strategy: analysis.strategy,
       status: 'active',
@@ -279,16 +283,16 @@ ${signal.status === 'mtg' ? `🔄 MTG Step: ${signal.mtgStep}/3\n` : ''}
 
     setSignals(prev => [signal, ...prev].slice(0, 50));
     addLog('signal', `Signal Generated: ${pair.symbol} ${analysis.direction} (${analysis.confidence}%)`);
-    addLog('info', `Based on ${analysis.strategy}`);
+    addLog('info', `Entry in 1 minute - Based on ${analysis.strategy}`);
 
     // Get current pair stats for telegram
     const currentPairStats = pairStats.get(pair.symbol) || { wins: 0, losses: 0 };
 
-    // Send to Telegram
+    // Send to Telegram immediately (1 minute before entry)
     sendToTelegram(signal, false, currentPairStats);
 
-    // Simulate result after 60 seconds
-    setTimeout(() => resolveSignal(signal), 60000);
+    // Simulate result 2 minutes from now (1 min wait + 1 min trade)
+    setTimeout(() => resolveSignal(signal), 120000);
 
     setStats(prev => ({
       ...prev,
@@ -395,9 +399,9 @@ ${signal.status === 'mtg' ? `🔄 MTG Step: ${signal.mtgStep}/3\n` : ''}
     addLog('info', 'Signal buffer initialized');
     addLog('info', 'Waiting for signals...');
 
-    // Generate signals every 30-90 seconds
+    // Generate signals every 3-4 minutes (180000-240000ms)
     const scheduleNext = () => {
-      const delay = 30000 + Math.random() * 60000;
+      const delay = 180000 + Math.random() * 60000; // 3-4 minutes
       intervalRef.current = setTimeout(() => {
         generateSignal();
         scheduleNext();

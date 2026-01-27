@@ -3,6 +3,7 @@ interface Candle {
   high: number;
   low: number;
   close: number;
+  time: Date;
 }
 
 interface ChartConfig {
@@ -10,133 +11,138 @@ interface ChartConfig {
   direction: 'CALL' | 'PUT';
   price: string;
   time: string;
+  entryTime: Date;
 }
 
+// Generate realistic market price based on pair type
+const getRealisticBasePrice = (pair: string): number => {
+  const pairPrices: Record<string, number> = {
+    'EUR/USD': 1.08 + Math.random() * 0.02,
+    'GBP/USD': 1.26 + Math.random() * 0.02,
+    'USD/JPY': 148 + Math.random() * 2,
+    'AUD/USD': 0.65 + Math.random() * 0.01,
+    'USD/CAD': 1.35 + Math.random() * 0.02,
+    'NZD/JPY': 92 + Math.random() * 1,
+    'EUR/JPY': 160 + Math.random() * 2,
+    'GBP/JPY': 187 + Math.random() * 2,
+    'AUD/JPY': 97 + Math.random() * 1,
+    'CHF/JPY': 167 + Math.random() * 2,
+  };
+  
+  // Check for matching pair
+  for (const [key, value] of Object.entries(pairPrices)) {
+    if (pair.includes(key.replace('/', ''))) return value;
+    if (pair.includes(key)) return value;
+  }
+  
+  // Default for OTC pairs
+  if (pair.includes('JPY')) return 90 + Math.random() * 10;
+  return 1.0 + Math.random() * 0.5;
+};
+
+// Generate realistic candle sizes based on price level
+const generateRealisticCandles = (basePrice: number, direction: 'CALL' | 'PUT', entryTime: Date): Candle[] => {
+  const candles: Candle[] = [];
+  let currentPrice = basePrice;
+  const numCandles = 30;
+  
+  // Determine volatility based on price magnitude
+  const volatility = basePrice > 50 ? 0.03 + Math.random() * 0.02 : 0.0003 + Math.random() * 0.0002;
+  
+  // Start time 30 minutes before entry
+  const startTime = new Date(entryTime.getTime() - numCandles * 60000);
+  
+  for (let i = 0; i < numCandles; i++) {
+    // Natural market movement with trend bias towards the end
+    const trendBias = i > numCandles - 5 
+      ? (direction === 'CALL' ? 0.65 : 0.35) 
+      : 0.5;
+    
+    const isUp = Math.random() < trendBias;
+    const candleVolatility = volatility * (0.5 + Math.random());
+    
+    const open = currentPrice;
+    const change = candleVolatility * (isUp ? 1 : -1);
+    const close = open + change;
+    
+    // Wicks - realistic proportions
+    const wickMultiplier = 0.3 + Math.random() * 0.4;
+    const high = Math.max(open, close) + Math.abs(change) * wickMultiplier;
+    const low = Math.min(open, close) - Math.abs(change) * wickMultiplier;
+    
+    candles.push({
+      open,
+      high,
+      low,
+      close,
+      time: new Date(startTime.getTime() + i * 60000)
+    });
+    
+    currentPrice = close;
+  }
+  
+  return candles;
+};
+
 export const generateChartImage = async (config: ChartConfig): Promise<Blob> => {
-  const width = 800;
-  const height = 500;
+  const width = 1000;
+  const height = 550;
   
   const canvas = document.createElement('canvas');
   canvas.width = width;
   canvas.height = height;
   const ctx = canvas.getContext('2d')!;
   
-  // Background gradient
-  const bgGradient = ctx.createLinearGradient(0, 0, 0, height);
-  bgGradient.addColorStop(0, '#0a0f1a');
-  bgGradient.addColorStop(1, '#0d1420');
-  ctx.fillStyle = bgGradient;
+  // Pure black background like reference
+  ctx.fillStyle = '#000000';
   ctx.fillRect(0, 0, width, height);
   
-  // Grid
-  ctx.strokeStyle = 'rgba(255,255,255,0.05)';
-  ctx.lineWidth = 1;
-  for (let i = 0; i <= 10; i++) {
-    const y = 60 + (i * (height - 120) / 10);
-    ctx.beginPath();
-    ctx.moveTo(50, y);
-    ctx.lineTo(width - 20, y);
-    ctx.stroke();
-  }
-  for (let i = 0; i <= 20; i++) {
-    const x = 50 + (i * (width - 70) / 20);
-    ctx.beginPath();
-    ctx.moveTo(x, 60);
-    ctx.lineTo(x, height - 60);
-    ctx.stroke();
-  }
+  // Get realistic base price and generate candles
+  const basePrice = getRealisticBasePrice(config.pair);
+  const candles = generateRealisticCandles(basePrice, config.direction, config.entryTime);
   
-  // Generate candle data
-  const candles: Candle[] = [];
-  let basePrice = 1.0 + Math.random() * 0.5;
-  
-  for (let i = 0; i < 60; i++) {
-    const volatility = 0.003 + Math.random() * 0.005;
-    const trend = config.direction === 'CALL' 
-      ? (i > 50 ? 0.6 : 0.45)
-      : (i > 50 ? 0.4 : 0.55);
-    const direction = Math.random() > trend ? 1 : -1;
-    const change = direction * volatility;
-    
-    const open = basePrice;
-    const close = open + change + (Math.random() - 0.5) * volatility;
-    const high = Math.max(open, close) + Math.random() * volatility * 0.5;
-    const low = Math.min(open, close) - Math.random() * volatility * 0.5;
-    
-    candles.push({ open, high, low, close });
-    basePrice = close;
-  }
-  
-  // Calculate price range
+  // Calculate price range with padding
   const allPrices = candles.flatMap(c => [c.high, c.low]);
-  const minPrice = Math.min(...allPrices) - 0.002;
-  const maxPrice = Math.max(...allPrices) + 0.002;
+  const minPrice = Math.min(...allPrices);
+  const maxPrice = Math.max(...allPrices);
   const priceRange = maxPrice - minPrice;
+  const pricePadding = priceRange * 0.15;
+  const chartMinPrice = minPrice - pricePadding;
+  const chartMaxPrice = maxPrice + pricePadding * 2; // Extra top padding for arrow
+  const chartPriceRange = chartMaxPrice - chartMinPrice;
   
-  const chartLeft = 50;
-  const chartRight = width - 20;
-  const chartTop = 60;
-  const chartBottom = height - 60;
+  const chartLeft = 70;
+  const chartRight = width - 40;
+  const chartTop = 50;
+  const chartBottom = height - 50;
   const chartWidth = chartRight - chartLeft;
   const chartHeight = chartBottom - chartTop;
   
-  const xScale = (i: number) => chartLeft + (i / (candles.length - 1)) * chartWidth;
-  const yScale = (price: number) => chartTop + ((maxPrice - price) / priceRange) * chartHeight;
+  const candleSpacing = chartWidth / candles.length;
+  const candleWidth = candleSpacing * 0.7;
   
-  const candleWidth = Math.max(6, (chartWidth / candles.length) * 0.7);
+  const xScale = (i: number) => chartLeft + (i + 0.5) * candleSpacing;
+  const yScale = (price: number) => chartTop + ((chartMaxPrice - price) / chartPriceRange) * chartHeight;
   
-  // Calculate MAs
-  const ma20: number[] = [];
-  const ma50: number[] = [];
+  // Draw title: PAIR (OTC) - DIRECTION
+  const marketType = config.pair.includes('OTC') ? '(OTC)' : '';
+  const pairName = config.pair.replace(' (OTC)', '').replace('-OTC', '');
+  const titleText = `${pairName} ${marketType} - ${config.direction}`.trim();
   
-  candles.forEach((_, i) => {
-    if (i >= 19) {
-      const sum = candles.slice(i - 19, i + 1).reduce((acc, c) => acc + c.close, 0);
-      ma20.push(sum / 20);
-    }
-    if (i >= 49) {
-      const sum = candles.slice(i - 49, i + 1).reduce((acc, c) => acc + c.close, 0);
-      ma50.push(sum / 50);
-    }
-  });
-  
-  // Draw MA50
-  if (ma50.length > 1) {
-    ctx.strokeStyle = '#3b82f6';
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    ma50.forEach((price, i) => {
-      const x = xScale(i + 49);
-      const y = yScale(price);
-      if (i === 0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
-    });
-    ctx.stroke();
-  }
-  
-  // Draw MA20
-  if (ma20.length > 1) {
-    ctx.strokeStyle = '#f97316';
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    ma20.forEach((price, i) => {
-      const x = xScale(i + 19);
-      const y = yScale(price);
-      if (i === 0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
-    });
-    ctx.stroke();
-  }
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 20px Arial, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText(titleText, width / 2, 30);
   
   // Draw candles
   candles.forEach((candle, i) => {
     const x = xScale(i);
     const isGreen = candle.close >= candle.open;
-    const color = isGreen ? '#22c55e' : '#ef4444';
+    const color = isGreen ? '#00ff00' : '#ff0000';
     
     // Wick
     ctx.strokeStyle = color;
-    ctx.lineWidth = 1;
+    ctx.lineWidth = 1.5;
     ctx.beginPath();
     ctx.moveTo(x, yScale(candle.high));
     ctx.lineTo(x, yScale(candle.low));
@@ -145,122 +151,99 @@ export const generateChartImage = async (config: ChartConfig): Promise<Blob> => 
     // Body
     ctx.fillStyle = color;
     const bodyTop = yScale(Math.max(candle.open, candle.close));
-    const bodyHeight = Math.max(2, Math.abs(yScale(candle.open) - yScale(candle.close)));
+    const bodyBottom = yScale(Math.min(candle.open, candle.close));
+    const bodyHeight = Math.max(2, bodyBottom - bodyTop);
     ctx.fillRect(x - candleWidth / 2, bodyTop, candleWidth, bodyHeight);
   });
   
-  // Signal arrow
+  // Entry line - dashed yellow/gold line at last candle price
   const lastCandle = candles[candles.length - 1];
-  const arrowX = xScale(candles.length - 1) + 20;
-  const arrowY = yScale(lastCandle.close);
+  const entryPrice = lastCandle.close;
+  const entryY = yScale(entryPrice);
   
-  ctx.fillStyle = config.direction === 'CALL' ? '#22c55e' : '#ef4444';
+  ctx.strokeStyle = '#ffd700';
+  ctx.setLineDash([8, 4]);
+  ctx.lineWidth = 1.5;
   ctx.beginPath();
-  if (config.direction === 'CALL') {
-    ctx.moveTo(arrowX, arrowY + 15);
-    ctx.lineTo(arrowX - 10, arrowY + 30);
-    ctx.lineTo(arrowX + 10, arrowY + 30);
-  } else {
-    ctx.moveTo(arrowX, arrowY - 15);
-    ctx.lineTo(arrowX - 10, arrowY - 30);
-    ctx.lineTo(arrowX + 10, arrowY - 30);
-  }
-  ctx.closePath();
-  ctx.fill();
-  
-  // Entry line
-  ctx.strokeStyle = config.direction === 'CALL' ? '#22c55e' : '#ef4444';
-  ctx.setLineDash([5, 5]);
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(chartLeft, arrowY);
-  ctx.lineTo(chartRight, arrowY);
+  ctx.moveTo(chartLeft, entryY);
+  ctx.lineTo(chartRight, entryY);
   ctx.stroke();
   ctx.setLineDash([]);
   
-  // Header
-  ctx.fillStyle = '#f97316';
-  ctx.font = 'bold 22px monospace';
+  // BUY/SELL arrow at the right side
+  const arrowX = xScale(candles.length - 1) + candleSpacing * 0.8;
+  const arrowColor = config.direction === 'CALL' ? '#00ff00' : '#ff0000';
+  const arrowLabel = config.direction === 'CALL' ? 'BUY' : 'SELL';
+  
+  // Arrow label
+  ctx.fillStyle = arrowColor;
+  ctx.font = 'bold 14px Arial, sans-serif';
   ctx.textAlign = 'center';
-  ctx.fillText('🏆 TR TALHA PRO 🏆', width / 2, 30);
   
-  // Pair info
-  ctx.fillStyle = '#fff';
-  ctx.font = 'bold 16px monospace';
-  ctx.textAlign = 'left';
-  ctx.fillText(`${config.pair}`, 60, 55);
+  if (config.direction === 'CALL') {
+    ctx.fillText(arrowLabel, arrowX, entryY - 35);
+    // Down arrow pointing to entry
+    ctx.beginPath();
+    ctx.moveTo(arrowX, entryY - 30);
+    ctx.lineTo(arrowX, entryY - 8);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(arrowX, entryY - 5);
+    ctx.lineTo(arrowX - 6, entryY - 12);
+    ctx.lineTo(arrowX + 6, entryY - 12);
+    ctx.closePath();
+    ctx.fill();
+  } else {
+    ctx.fillText(arrowLabel, arrowX, entryY + 45);
+    // Up arrow pointing to entry
+    ctx.beginPath();
+    ctx.moveTo(arrowX, entryY + 30);
+    ctx.lineTo(arrowX, entryY + 8);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(arrowX, entryY + 5);
+    ctx.lineTo(arrowX - 6, entryY + 12);
+    ctx.lineTo(arrowX + 6, entryY + 12);
+    ctx.closePath();
+    ctx.fill();
+  }
   
-  ctx.font = '14px monospace';
-  ctx.fillStyle = '#9ca3af';
-  ctx.fillText('M1 | Timeframe', 200, 55);
-  
-  // Direction badge
-  const badgeX = width - 120;
-  const badgeColor = config.direction === 'CALL' ? '#22c55e' : '#ef4444';
-  ctx.fillStyle = badgeColor;
-  ctx.beginPath();
-  ctx.roundRect(badgeX - 40, 35, 100, 28, 5);
-  ctx.fill();
-  
-  ctx.fillStyle = '#fff';
-  ctx.font = 'bold 14px monospace';
-  ctx.textAlign = 'center';
-  ctx.fillText(config.direction === 'CALL' ? '🟢 CALL' : '🔴 PUT', badgeX + 10, 54);
-  
-  // Price info box
-  ctx.fillStyle = 'rgba(0,0,0,0.6)';
-  ctx.beginPath();
-  ctx.roundRect(chartRight - 140, chartTop + 10, 130, 70, 5);
-  ctx.fill();
-  
-  ctx.fillStyle = '#f97316';
-  ctx.font = 'bold 12px monospace';
-  ctx.textAlign = 'left';
-  ctx.fillText('Entry Price:', chartRight - 130, chartTop + 30);
-  ctx.fillStyle = '#fff';
-  ctx.font = 'bold 16px monospace';
-  ctx.fillText(`💋 ${config.price}`, chartRight - 130, chartTop + 50);
-  ctx.fillStyle = '#9ca3af';
-  ctx.font = '11px monospace';
-  ctx.fillText(`⏰ ${config.time}`, chartRight - 130, chartTop + 68);
-  
-  // Legend
-  ctx.fillStyle = 'rgba(0,0,0,0.6)';
-  ctx.beginPath();
-  ctx.roundRect(chartLeft + 10, chartTop + 10, 100, 50, 5);
-  ctx.fill();
-  
-  ctx.strokeStyle = '#f97316';
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.moveTo(chartLeft + 20, chartTop + 28);
-  ctx.lineTo(chartLeft + 45, chartTop + 28);
-  ctx.stroke();
-  ctx.fillStyle = '#fff';
-  ctx.font = '11px monospace';
-  ctx.fillText('MA20', chartLeft + 50, chartTop + 32);
-  
-  ctx.strokeStyle = '#3b82f6';
-  ctx.beginPath();
-  ctx.moveTo(chartLeft + 20, chartTop + 45);
-  ctx.lineTo(chartLeft + 45, chartTop + 45);
-  ctx.stroke();
-  ctx.fillText('MA50', chartLeft + 50, chartTop + 49);
-  
-  // Footer watermark
-  ctx.fillStyle = 'rgba(249, 115, 22, 0.3)';
-  ctx.font = 'bold 12px monospace';
-  ctx.textAlign = 'center';
-  ctx.fillText('TG: @TALHA_XYZ | TR TALHA PRO', width / 2, height - 15);
-  
-  // Price axis labels
-  ctx.fillStyle = '#9ca3af';
-  ctx.font = '10px monospace';
+  // Price axis labels (left side)
+  ctx.fillStyle = '#ffffff';
+  ctx.font = '12px Arial, sans-serif';
   ctx.textAlign = 'right';
-  for (let i = 0; i <= 5; i++) {
-    const price = maxPrice - (i / 5) * priceRange;
-    const y = chartTop + (i / 5) * chartHeight;
-    ctx.fillText(price.toFixed(4), chartLeft - 5, y + 4);
+  
+  const priceSteps = 5;
+  const priceDecimals = basePrice > 50 ? 2 : 4;
+  for (let i = 0; i <= priceSteps; i++) {
+    const price = chartMaxPrice - (i / priceSteps) * chartPriceRange;
+    const y = chartTop + (i / priceSteps) * chartHeight;
+    ctx.fillText(price.toFixed(priceDecimals) + ' -', chartLeft - 8, y + 4);
+  }
+  
+  // "Price" label
+  ctx.save();
+  ctx.translate(15, chartTop + chartHeight / 2);
+  ctx.rotate(-Math.PI / 2);
+  ctx.textAlign = 'center';
+  ctx.font = '12px Arial, sans-serif';
+  ctx.fillText('Price', 0, 0);
+  ctx.restore();
+  
+  // Time axis labels (bottom)
+  ctx.textAlign = 'center';
+  ctx.font = '11px Arial, sans-serif';
+  
+  // Show time labels every 3 candles
+  for (let i = 0; i < candles.length; i += 3) {
+    const candle = candles[i];
+    const x = xScale(i);
+    const timeStr = candle.time.toLocaleTimeString('en-US', { 
+      hour: '2-digit', 
+      minute: '2-digit',
+      hour12: false 
+    });
+    ctx.fillText(timeStr, x, chartBottom + 20);
   }
   
   return new Promise((resolve) => {

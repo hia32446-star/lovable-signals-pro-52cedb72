@@ -15,7 +15,7 @@ export const Header = ({ currentView, onViewChange, isOnline }: HeaderProps) => 
           <Rocket className="w-6 h-6 text-primary-foreground" />
         </div>
         <h1 className="text-2xl font-bold bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent">
-          BD TRADER PRO V5.0
+          TR TALHA PRO
         </h1>
       </div>
 

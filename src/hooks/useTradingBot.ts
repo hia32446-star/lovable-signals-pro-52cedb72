@@ -67,7 +67,7 @@ export const useTradingBot = (activePairs: CurrencyPair[], telegramConfig: Teleg
         ? Math.round((pStats.wins / (pStats.wins + pStats.losses)) * 100) 
         : 0;
       
-      message = `🏆 ==== SIGNALS DE ==== 🏆
+      message = `🏆 ==== TR TALHA PRO ==== 🏆
 
 🌐 ${displayPair}
 ⏰ ${time}

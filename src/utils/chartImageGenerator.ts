@@ -182,7 +182,7 @@ export const generateChartImage = async (config: ChartConfig): Promise<Blob> => 
   ctx.fillStyle = '#f97316';
   ctx.font = 'bold 22px monospace';
   ctx.textAlign = 'center';
-  ctx.fillText('🏆 BD TRADER PRO V5.0 🏆', width / 2, 30);
+  ctx.fillText('🏆 TR TALHA PRO 🏆', width / 2, 30);
   
   // Pair info
   ctx.fillStyle = '#fff';
@@ -251,7 +251,7 @@ export const generateChartImage = async (config: ChartConfig): Promise<Blob> => 
   ctx.fillStyle = 'rgba(249, 115, 22, 0.3)';
   ctx.font = 'bold 12px monospace';
   ctx.textAlign = 'center';
-  ctx.fillText('TG: @X_Trader_Pro | BD TRADER PRO', width / 2, height - 15);
+  ctx.fillText('TG: @TALHA_XYZ | TR TALHA PRO', width / 2, height - 15);
   
   // Price axis labels
   ctx.fillStyle = '#9ca3af';

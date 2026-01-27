@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { Signal, TradingStats, ActivityLog, CurrencyPair, TelegramConfig, SignalDirection, PairStats } from '@/types/trading';
 import { tradingStrategies } from '@/data/strategies';
+import { generateChartImage, blobToBase64 } from '@/utils/chartImageGenerator';
 
 const generateId = () => Math.random().toString(36).substr(2, 9);
 
@@ -66,7 +67,7 @@ export const useTradingBot = (activePairs: CurrencyPair[], telegramConfig: Teleg
         ? Math.round((pStats.wins / (pStats.wins + pStats.losses)) * 100) 
         : 0;
       
-      message = `🏆 ==== SINALS DE ==== 🏆
+      message = `🏆 ==== SIGNALS DE ==== 🏆
 
 🌐 ${displayPair}
 ⏰ ${time}
@@ -76,6 +77,36 @@ ${directionEmoji} ${signal.direction}
 
 🎰 Current Pair: ${pStats.wins}x${pStats.losses} ·◈· (${pairWinRate}%)
 🇲🇴 Signal : ${formatDate(signal.entryTime)}`;
+
+      // Generate and send chart image for signals
+      try {
+        const chartBlob = await generateChartImage({
+          pair: displayPair,
+          direction: signal.direction,
+          price,
+          time,
+        });
+        
+        const base64Image = await blobToBase64(chartBlob);
+        
+        // Send photo with caption
+        const formData = new FormData();
+        formData.append('chat_id', telegramConfig.chatId);
+        formData.append('photo', chartBlob, 'chart.png');
+        formData.append('caption', message);
+        formData.append('parse_mode', 'Markdown');
+        
+        await fetch(`https://api.telegram.org/bot${telegramConfig.botToken}/sendPhoto`, {
+          method: 'POST',
+          body: formData,
+        });
+        
+        addLog('info', `Chart image sent to Telegram for ${signal.pair}`);
+        return;
+      } catch (chartError) {
+        addLog('error', `Chart generation failed, sending text only: ${chartError}`);
+        // Fall through to send text message
+      }
 
     } else {
       const resultEmoji = signal.status === 'win' ? '✅✅✅' : signal.status === 'mtg' ? '🔄✅✅' : '❌❌❌';
@@ -111,9 +142,6 @@ ${signal.status === 'mtg' ? `🔄 MTG Step: ${signal.mtgStep}/3\n` : ''}
           parse_mode: 'Markdown',
         }),
       });
-      if (!isResult) {
-        addLog('info', `Signal sent to Telegram for ${signal.pair}`);
-      }
     } catch (error) {
       addLog('error', `Failed to send Telegram message: ${error}`);
     }

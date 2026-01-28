@@ -1,10 +1,4 @@
-interface Candle {
-  open: number;
-  high: number;
-  low: number;
-  close: number;
-  time: Date;
-}
+import { MarketCandle, generateRealtimeCandles, getPairConfig } from './marketSimulator';
 
 interface ChartConfig {
   pair: string;
@@ -12,77 +6,8 @@ interface ChartConfig {
   price: string;
   time: string;
   entryTime: Date;
+  candles?: MarketCandle[]; // Optional pre-generated candles from analysis
 }
-
-// Generate realistic market price based on pair type
-const getRealisticBasePrice = (pair: string): number => {
-  const pairPrices: Record<string, number> = {
-    'EUR/USD': 1.08 + Math.random() * 0.02,
-    'GBP/USD': 1.26 + Math.random() * 0.02,
-    'USD/JPY': 148 + Math.random() * 2,
-    'AUD/USD': 0.65 + Math.random() * 0.01,
-    'USD/CAD': 1.35 + Math.random() * 0.02,
-    'NZD/JPY': 92 + Math.random() * 1,
-    'EUR/JPY': 160 + Math.random() * 2,
-    'GBP/JPY': 187 + Math.random() * 2,
-    'AUD/JPY': 97 + Math.random() * 1,
-    'CHF/JPY': 167 + Math.random() * 2,
-  };
-  
-  // Check for matching pair
-  for (const [key, value] of Object.entries(pairPrices)) {
-    if (pair.includes(key.replace('/', ''))) return value;
-    if (pair.includes(key)) return value;
-  }
-  
-  // Default for OTC pairs
-  if (pair.includes('JPY')) return 90 + Math.random() * 10;
-  return 1.0 + Math.random() * 0.5;
-};
-
-// Generate realistic candle sizes based on price level
-const generateRealisticCandles = (basePrice: number, direction: 'CALL' | 'PUT', entryTime: Date): Candle[] => {
-  const candles: Candle[] = [];
-  let currentPrice = basePrice;
-  const numCandles = 30;
-  
-  // Determine volatility based on price magnitude
-  const volatility = basePrice > 50 ? 0.03 + Math.random() * 0.02 : 0.0003 + Math.random() * 0.0002;
-  
-  // Start time 30 minutes before entry
-  const startTime = new Date(entryTime.getTime() - numCandles * 60000);
-  
-  for (let i = 0; i < numCandles; i++) {
-    // Natural market movement with trend bias towards the end
-    const trendBias = i > numCandles - 5 
-      ? (direction === 'CALL' ? 0.65 : 0.35) 
-      : 0.5;
-    
-    const isUp = Math.random() < trendBias;
-    const candleVolatility = volatility * (0.5 + Math.random());
-    
-    const open = currentPrice;
-    const change = candleVolatility * (isUp ? 1 : -1);
-    const close = open + change;
-    
-    // Wicks - realistic proportions
-    const wickMultiplier = 0.3 + Math.random() * 0.4;
-    const high = Math.max(open, close) + Math.abs(change) * wickMultiplier;
-    const low = Math.min(open, close) - Math.abs(change) * wickMultiplier;
-    
-    candles.push({
-      open,
-      high,
-      low,
-      close,
-      time: new Date(startTime.getTime() + i * 60000)
-    });
-    
-    currentPrice = close;
-  }
-  
-  return candles;
-};
 
 export const generateChartImage = async (config: ChartConfig): Promise<Blob> => {
   const width = 1000;
@@ -97,9 +22,9 @@ export const generateChartImage = async (config: ChartConfig): Promise<Blob> => 
   ctx.fillStyle = '#000000';
   ctx.fillRect(0, 0, width, height);
   
-  // Get realistic base price and generate candles
-  const basePrice = getRealisticBasePrice(config.pair);
-  const candles = generateRealisticCandles(basePrice, config.direction, config.entryTime);
+  // Use provided candles or generate new ones
+  const pairConfig = getPairConfig(config.pair);
+  const candles = config.candles || generateRealtimeCandles(config.pair, 35, config.entryTime, config.direction).candles;
   
   // Calculate price range with padding
   const allPrices = candles.flatMap(c => [c.high, c.low]);
@@ -214,7 +139,7 @@ export const generateChartImage = async (config: ChartConfig): Promise<Blob> => 
   ctx.textAlign = 'right';
   
   const priceSteps = 5;
-  const priceDecimals = basePrice > 50 ? 2 : 4;
+  const priceDecimals = pairConfig.decimals;
   for (let i = 0; i <= priceSteps; i++) {
     const price = chartMaxPrice - (i / priceSteps) * chartPriceRange;
     const y = chartTop + (i / priceSteps) * chartHeight;

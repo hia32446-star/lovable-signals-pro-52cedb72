@@ -1,7 +1,8 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { Signal, TradingStats, ActivityLog, CurrencyPair, TelegramConfig, SignalDirection, PairStats } from '@/types/trading';
-import { tradingStrategies } from '@/data/strategies';
 import { generateChartImage, blobToBase64 } from '@/utils/chartImageGenerator';
+import { generateRealtimeCandles, MarketCandle } from '@/utils/marketSimulator';
+import { analyzeMarketAdvanced } from '@/utils/technicalAnalysis';
 
 const generateId = () => Math.random().toString(36).substr(2, 9);
 
@@ -51,7 +52,8 @@ export const useTradingBot = (activePairs: CurrencyPair[], telegramConfig: Teleg
     signal: Signal, 
     isResult: boolean = false, 
     currentPairStats?: PairStats,
-    currentStats?: { wins: number; losses: number; mtgWins: number }
+    currentStats?: { wins: number; losses: number; mtgWins: number },
+    marketCandles?: MarketCandle[]
   ) => {
     if (!telegramConfig.isEnabled || !telegramConfig.botToken || !telegramConfig.chatId) return;
 
@@ -83,7 +85,7 @@ ${directionEmoji} ${signal.direction}
 🎰 Current Pair: ${pStats.wins}x${pStats.losses} ·◈· (${pairWinRate}%)
 🇲🇴 Signal : ${formatDate(signal.entryTime)}`;
 
-      // Generate and send chart image for signals
+      // Generate and send chart image for signals with real market data
       try {
         const chartBlob = await generateChartImage({
           pair: displayPair,
@@ -91,6 +93,7 @@ ${directionEmoji} ${signal.direction}
           price,
           time,
           entryTime: new Date(signal.entryTime),
+          candles: marketCandles, // Pass pre-analyzed market candles
         });
         
         const base64Image = await blobToBase64(chartBlob);
@@ -155,95 +158,52 @@ ${signal.status === 'mtg' ? `🔄 MTG Step: ${signal.mtgStep}/3\n` : ''}
     }
   }, [telegramConfig, stats, addLog]);
 
-  const analyzeMarket = useCallback((pair: CurrencyPair): { direction: SignalDirection; confidence: number; strategy: string } | null => {
-    // Simulated technical analysis with high accuracy
-    const activeStrategies = tradingStrategies.filter(s => s.isActive);
+  // Advanced market analysis using multi-indicator confluence
+  const analyzeMarket = useCallback((pair: CurrencyPair): { 
+    direction: SignalDirection; 
+    confidence: number; 
+    strategy: string;
+    marketData: { candles: MarketCandle[]; currentPrice: number };
+  } | null => {
+    // Generate realistic market data for analysis
+    const entryTime = new Date(Date.now() + 60000); // 1 minute ahead
+    const marketData = generateRealtimeCandles(pair.symbol, 60, entryTime, 'CALL'); // Initial neutral generation
     
-    // Multi-indicator confluence check
-    const indicators = {
-      rsi: Math.random() * 100,
-      macd: Math.random() - 0.5,
-      stochastic: Math.random() * 100,
-      adx: Math.random() * 50,
-      bbPosition: Math.random(),
-      emaAlignment: Math.random() > 0.5,
-      volume: Math.random(),
-    };
-
-    // Calculate confluence score
-    let bullishScore = 0;
-    let bearishScore = 0;
-
-    // RSI analysis
-    if (indicators.rsi < 30) bullishScore += 2;
-    else if (indicators.rsi > 70) bearishScore += 2;
-    else if (indicators.rsi < 45) bullishScore += 1;
-    else if (indicators.rsi > 55) bearishScore += 1;
-
-    // MACD analysis
-    if (indicators.macd > 0.1) bullishScore += 2;
-    else if (indicators.macd < -0.1) bearishScore += 2;
-    else if (indicators.macd > 0) bullishScore += 1;
-    else bearishScore += 1;
-
-    // Stochastic analysis
-    if (indicators.stochastic < 20) bullishScore += 2;
-    else if (indicators.stochastic > 80) bearishScore += 2;
-
-    // ADX trend strength
-    if (indicators.adx > 25) {
-      if (indicators.emaAlignment) bullishScore += 1;
-      else bearishScore += 1;
+    // Run advanced technical analysis
+    const analysis = analyzeMarketAdvanced(marketData.candles);
+    
+    if (!analysis) {
+      return null;
     }
-
-    // Bollinger Band position
-    if (indicators.bbPosition < 0.2) bullishScore += 1;
-    else if (indicators.bbPosition > 0.8) bearishScore += 1;
-
-    // Volume confirmation
-    if (indicators.volume > 0.7) {
-      if (bullishScore > bearishScore) bullishScore += 1;
-      else bearishScore += 1;
+    
+    // Risk filter - skip high-risk signals
+    if (analysis.riskLevel === 'high' && analysis.confidence < 93) {
+      addLog('info', `Skipping ${pair.symbol} - High risk signal filtered`);
+      return null;
     }
-
-    const totalScore = bullishScore + bearishScore;
-    const minConfidence = 90;
-    const maxConfidence = 98;
-
-    // Only generate signal if confluence is strong enough
-    if (totalScore < 4) return null;
-
-    const direction: SignalDirection = bullishScore > bearishScore ? 'CALL' : 'PUT';
-    const dominantScore = Math.max(bullishScore, bearishScore);
-    const confidence = Math.min(maxConfidence, minConfidence + (dominantScore / totalScore) * (maxConfidence - minConfidence));
-
-    // Select matching strategy
-    const matchingStrategies = activeStrategies.filter(s => {
-      if (direction === 'CALL') {
-        return s.name.toLowerCase().includes('bullish') || 
-               s.name.toLowerCase().includes('bounce') ||
-               s.name.toLowerCase().includes('oversold') ||
-               s.name.toLowerCase().includes('golden') ||
-               s.name.toLowerCase().includes('recovery');
-      } else {
-        return s.name.toLowerCase().includes('bearish') ||
-               s.name.toLowerCase().includes('reversal') ||
-               s.name.toLowerCase().includes('overbought') ||
-               s.name.toLowerCase().includes('death') ||
-               s.name.toLowerCase().includes('rejection');
-      }
-    });
-
-    const strategy = matchingStrategies.length > 0 
-      ? getRandomElement(matchingStrategies)
-      : getRandomElement(activeStrategies);
-
+    
+    // Regenerate candles aligned with detected direction for chart accuracy
+    const alignedMarketData = generateRealtimeCandles(pair.symbol, 35, entryTime, analysis.direction);
+    
+    // Log indicator confluence
+    const activeIndicators = Object.entries(analysis.indicators)
+      .filter(([_, v]) => v.signal !== 'neutral' && v.strength > 0.3)
+      .map(([k, v]) => `${k}:${v.signal}`)
+      .join(', ');
+    
+    addLog('info', `Analysis: ${activeIndicators}`);
+    addLog('info', `Trend: ${analysis.trendStrength > 0.5 ? 'Strong' : 'Moderate'} | Risk: ${analysis.riskLevel}`);
+    
     return {
-      direction,
-      confidence: Math.round(confidence * 10) / 10,
-      strategy: strategy.name,
+      direction: analysis.direction,
+      confidence: analysis.confidence,
+      strategy: analysis.strategy,
+      marketData: {
+        candles: alignedMarketData.candles,
+        currentPrice: alignedMarketData.currentPrice,
+      },
     };
-  }, []);
+  }, [addLog]);
 
   const generateSignal = useCallback(() => {
     const eligiblePairs = activePairs.filter(p => p.isActive);
@@ -295,8 +255,8 @@ ${signal.status === 'mtg' ? `🔄 MTG Step: ${signal.mtgStep}/3\n` : ''}
     // Get current pair stats for telegram
     const currentPairStats = pairStats.get(pair.symbol) || { wins: 0, losses: 0 };
 
-    // Send to Telegram immediately (1 minute before entry)
-    sendToTelegram(signal, false, currentPairStats);
+    // Send to Telegram immediately (1 minute before entry) with real market data
+    sendToTelegram(signal, false, currentPairStats, undefined, analysis.marketData.candles);
 
     // Simulate result 2 minutes from now (1 min wait + 1 min trade)
     setTimeout(() => resolveSignal(signal), 120000);

@@ -47,7 +47,12 @@ export const useTradingBot = (activePairs: CurrencyPair[], telegramConfig: Teleg
     return `${signal.pair} - ${signal.direction}`;
   };
 
-  const sendToTelegram = useCallback(async (signal: Signal, isResult: boolean = false, currentPairStats?: PairStats) => {
+  const sendToTelegram = useCallback(async (
+    signal: Signal, 
+    isResult: boolean = false, 
+    currentPairStats?: PairStats,
+    currentStats?: { wins: number; losses: number; mtgWins: number }
+  ) => {
     if (!telegramConfig.isEnabled || !telegramConfig.botToken || !telegramConfig.chatId) return;
 
     const directionEmoji = signal.direction === 'CALL' ? '🟢' : '🔴';
@@ -113,8 +118,10 @@ ${directionEmoji} ${signal.direction}
       const resultEmoji = signal.status === 'win' ? '✅✅✅' : signal.status === 'mtg' ? '🔄✅✅' : '❌❌❌';
       const resultText = signal.status === 'win' ? 'WIN' : signal.status === 'mtg' ? 'MTG WIN' : 'LOSS';
       
-      const totalWins = stats.wins + stats.mtgWins;
-      const totalDecided = totalWins + stats.losses;
+      // Use passed stats for accurate calculation
+      const statsToUse = currentStats || stats;
+      const totalWins = statsToUse.wins + statsToUse.mtgWins;
+      const totalDecided = totalWins + statsToUse.losses;
       const overallWinRate = totalDecided > 0 ? Math.round((totalWins / totalDecided) * 100) : 0;
       
       const pStats = currentPairStats || { wins: 0, losses: 0 };
@@ -129,7 +136,7 @@ ${directionEmoji} ${signal.direction}
 
 ${resultEmoji} ${resultText}
 ${signal.status === 'mtg' ? `🔄 MTG Step: ${signal.mtgStep}/3\n` : ''}
-🎰 Win: ${totalWins} | Loss: ${stats.losses} (${overallWinRate}%)
+🎰 Win: ${totalWins} | Loss: ${statsToUse.losses} (${overallWinRate}%)
 🇲🇴 Esse par: ${pStats.wins}x${pStats.losses} (${pairWinRate}%)`;
     }
 
@@ -308,6 +315,7 @@ ${signal.status === 'mtg' ? `🔄 MTG Step: ${signal.mtgStep}/3\n` : ''}
 
     let resolvedSignal: Signal | null = null;
     let newPairStats: PairStats | null = null;
+    let updatedStats: { wins: number; losses: number; mtgWins: number } | null = null;
 
     setSignals(prev => prev.map(s => {
       if (s.id === signal.id) {
@@ -346,12 +354,15 @@ ${signal.status === 'mtg' ? `🔄 MTG Step: ${signal.mtgStep}/3\n` : ''}
           return updated;
         });
         
-        // Update stats
+        // Update stats and capture the new values
         setStats(prev => {
           const wins = newStatus === 'win' ? prev.wins + 1 : prev.wins;
           const mtgWins = newStatus === 'mtg' ? prev.mtgWins + 1 : prev.mtgWins;
           const losses = newStatus === 'loss' ? prev.losses + 1 : prev.losses;
           const totalDecided = wins + mtgWins + losses;
+          
+          // Capture updated stats for Telegram
+          updatedStats = { wins, losses, mtgWins };
           
           return {
             ...prev,
@@ -377,13 +388,11 @@ ${signal.status === 'mtg' ? `🔄 MTG Step: ${signal.mtgStep}/3\n` : ''}
       return s;
     }));
 
-    // Send result to Telegram after state updates
+    // Send result to Telegram after state updates with accurate stats
     setTimeout(() => {
-      if (resolvedSignal) {
-        const currentPairStats = pairStats.get(signal.pair) || { wins: 0, losses: 0 };
-        // Adjust for the update we just made
-        const adjustedStats = newPairStats || currentPairStats;
-        sendToTelegram(resolvedSignal, true, adjustedStats);
+      if (resolvedSignal && updatedStats) {
+        const adjustedPairStats = newPairStats || pairStats.get(signal.pair) || { wins: 0, losses: 0 };
+        sendToTelegram(resolvedSignal, true, adjustedPairStats, updatedStats);
       }
     }, 100);
   }, [addLog, sendToTelegram, pairStats]);

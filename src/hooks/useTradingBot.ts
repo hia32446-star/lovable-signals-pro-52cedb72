@@ -273,89 +273,90 @@ ${signal.status === 'mtg' ? `🔄 MTG Step: ${signal.mtgStep}/3\n` : ''}
     const winProbability = signal.confidence / 100;
     const isWin = Math.random() < winProbability;
 
-    let resolvedSignal: Signal | null = null;
-    let newPairStats: PairStats | null = null;
-    let updatedStats: { wins: number; losses: number; mtgWins: number } | null = null;
+    // Calculate the new status first
+    let newStatus: Signal['status'] = isWin ? 'win' : 'loss';
+    let mtgStep = signal.mtgStep || 0;
+    
+    // MTG logic determination
+    if (!isWin && mtgStep < 3) {
+      // Start or continue MTG sequence
+      mtgStateRef.current.set(signal.pair, {
+        step: mtgStep + 1,
+        lastDirection: signal.direction,
+      });
+      newStatus = 'loss';
+    } else if (isWin && mtgStep > 0) {
+      // MTG win - recovered through martingale
+      newStatus = 'mtg';
+      mtgStateRef.current.delete(signal.pair);
+    } else if (isWin) {
+      // Regular win
+      newStatus = 'win';
+      mtgStateRef.current.delete(signal.pair);
+    }
 
-    setSignals(prev => prev.map(s => {
-      if (s.id === signal.id) {
-        let newStatus: Signal['status'] = isWin ? 'win' : 'loss';
-        
-        // MTG logic
-        if (!isWin && signal.mtgStep !== undefined && signal.mtgStep < 3) {
-          // Start or continue MTG
-          mtgStateRef.current.set(signal.pair, {
-            step: (signal.mtgStep || 0) + 1,
-            lastDirection: signal.direction,
-          });
-          newStatus = 'loss';
-        } else if (isWin && signal.mtgStep && signal.mtgStep > 0) {
-          // MTG win
-          newStatus = 'mtg';
-          mtgStateRef.current.delete(signal.pair);
-        } else if (isWin) {
-          mtgStateRef.current.delete(signal.pair);
-        }
+    // Create the resolved signal
+    const resolvedSignal: Signal = {
+      ...signal,
+      status: newStatus,
+    };
 
-        resolvedSignal = { ...s, status: newStatus };
+    // Update signals list
+    setSignals(prev => prev.map(s => s.id === signal.id ? resolvedSignal : s));
 
-        // Update pair stats
-        setPairStats(prev => {
-          const updated = new Map(prev);
-          const current = updated.get(signal.pair) || { wins: 0, losses: 0 };
-          
-          if (newStatus === 'win' || newStatus === 'mtg') {
-            newPairStats = { wins: current.wins + 1, losses: current.losses };
-          } else {
-            newPairStats = { wins: current.wins, losses: current.losses + 1 };
-          }
-          
-          updated.set(signal.pair, newPairStats);
-          return updated;
-        });
-        
-        // Update stats and capture the new values
-        setStats(prev => {
-          const wins = newStatus === 'win' ? prev.wins + 1 : prev.wins;
-          const mtgWins = newStatus === 'mtg' ? prev.mtgWins + 1 : prev.mtgWins;
-          const losses = newStatus === 'loss' ? prev.losses + 1 : prev.losses;
-          const totalDecided = wins + mtgWins + losses;
-          
-          // Capture updated stats for Telegram
-          updatedStats = { wins, losses, mtgWins };
-          
-          return {
-            ...prev,
-            wins,
-            losses,
-            mtgWins,
-            activeSignals: Math.max(0, prev.activeSignals - 1),
-            winRate: totalDecided > 0 ? ((wins + mtgWins) / totalDecided) * 100 : 0,
-          };
-        });
-
-        // Log result
-        if (newStatus === 'win') {
-          addLog('win', `WIN: ${signal.pair}`);
-        } else if (newStatus === 'mtg') {
-          addLog('win', `MTG WIN: ${signal.pair} (Step ${signal.mtgStep})`);
-        } else {
-          addLog('loss', `LOSS: ${signal.pair}`);
-        }
-
-        return resolvedSignal;
+    // Update pair stats atomically and capture the new values
+    let capturedPairStats: PairStats = { wins: 0, losses: 0 };
+    setPairStats(prev => {
+      const updated = new Map(prev);
+      const current = prev.get(signal.pair) || { wins: 0, losses: 0 };
+      
+      if (newStatus === 'win' || newStatus === 'mtg') {
+        capturedPairStats = { wins: current.wins + 1, losses: current.losses };
+      } else {
+        capturedPairStats = { wins: current.wins, losses: current.losses + 1 };
       }
-      return s;
-    }));
+      
+      updated.set(signal.pair, capturedPairStats);
+      return updated;
+    });
 
-    // Send result to Telegram after state updates with accurate stats
+    // Update global stats atomically and capture for Telegram
+    let capturedGlobalStats = { wins: 0, losses: 0, mtgWins: 0 };
+    setStats(prev => {
+      const newWins = newStatus === 'win' ? prev.wins + 1 : prev.wins;
+      const newMtgWins = newStatus === 'mtg' ? prev.mtgWins + 1 : prev.mtgWins;
+      const newLosses = newStatus === 'loss' ? prev.losses + 1 : prev.losses;
+      const totalDecided = newWins + newMtgWins + newLosses;
+      const newWinRate = totalDecided > 0 ? ((newWins + newMtgWins) / totalDecided) * 100 : 0;
+      
+      // Capture for Telegram - these are the ACTUAL new values
+      capturedGlobalStats = { wins: newWins, losses: newLosses, mtgWins: newMtgWins };
+      
+      return {
+        ...prev,
+        wins: newWins,
+        losses: newLosses,
+        mtgWins: newMtgWins,
+        activeSignals: Math.max(0, prev.activeSignals - 1),
+        winRate: newWinRate,
+      };
+    });
+
+    // Log the ACTUAL result
+    if (newStatus === 'win') {
+      addLog('win', `WIN: ${signal.pair}`);
+    } else if (newStatus === 'mtg') {
+      addLog('win', `MTG WIN: ${signal.pair} (Step ${mtgStep})`);
+    } else {
+      addLog('loss', `LOSS: ${signal.pair}`);
+    }
+
+    // Send result to Telegram with the captured accurate stats
+    // Using setTimeout to ensure React has processed state updates
     setTimeout(() => {
-      if (resolvedSignal && updatedStats) {
-        const adjustedPairStats = newPairStats || pairStats.get(signal.pair) || { wins: 0, losses: 0 };
-        sendToTelegram(resolvedSignal, true, adjustedPairStats, updatedStats);
-      }
-    }, 100);
-  }, [addLog, sendToTelegram, pairStats]);
+      sendToTelegram(resolvedSignal, true, capturedPairStats, capturedGlobalStats);
+    }, 50);
+  }, [addLog, sendToTelegram]);
 
   const startBot = useCallback(() => {
     if (isRunning) return;

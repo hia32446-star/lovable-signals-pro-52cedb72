@@ -1,12 +1,22 @@
 import { MarketCandle, generateRealtimeCandles, getPairConfig } from './marketSimulator';
 
+// Generic candle interface that works with both simulated and API data
+interface ChartCandle {
+  time: Date | number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+}
+
 interface ChartConfig {
   pair: string;
   direction: 'CALL' | 'PUT';
   price: string;
   time: string;
   entryTime: Date;
-  candles?: MarketCandle[]; // Optional pre-generated candles from analysis
+  candles?: MarketCandle[] | ChartCandle[]; // Support both MarketCandle and API candles
+  isRealData?: boolean; // Flag to indicate if using real API data
 }
 
 export const generateChartImage = async (config: ChartConfig): Promise<Blob> => {
@@ -163,7 +173,9 @@ export const generateChartImage = async (config: ChartConfig): Promise<Blob> => 
   for (let i = 0; i < candles.length; i += 3) {
     const candle = candles[i];
     const x = xScale(i);
-    const timeStr = candle.time.toLocaleTimeString('en-US', { 
+    // Handle both Date objects and timestamps
+    const candleTime = candle.time instanceof Date ? candle.time : new Date(candle.time);
+    const timeStr = candleTime.toLocaleTimeString('en-US', { 
       hour: '2-digit', 
       minute: '2-digit',
       hour12: false 

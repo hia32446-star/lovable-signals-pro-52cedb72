@@ -3,6 +3,7 @@ import { Signal, TradingStats, ActivityLog, CurrencyPair, TelegramConfig, Signal
 import { generateChartImage, blobToBase64 } from '@/utils/chartImageGenerator';
 import { generateRealtimeCandles, MarketCandle } from '@/utils/marketSimulator';
 import { analyzeMarketAdvanced } from '@/utils/technicalAnalysis';
+import { fetchMarketData, recordTradeEntry, validateTradeResult, LiveMarketData, convertToChartCandles } from '@/utils/marketApi';
 
 const generateId = () => Math.random().toString(36).substr(2, 9);
 
@@ -158,19 +159,66 @@ ${signal.status === 'mtg' ? `🔄 MTG Step: ${signal.mtgStep}/3\n` : ''}
     }
   }, [telegramConfig, stats, addLog]);
 
-  // Advanced market analysis using multi-indicator confluence
-  const analyzeMarket = useCallback((pair: CurrencyPair): { 
+  // Advanced market analysis using real API data + multi-indicator confluence
+  const analyzeMarket = useCallback(async (pair: CurrencyPair): Promise<{ 
     direction: SignalDirection; 
     confidence: number; 
     strategy: string;
     marketData: { candles: MarketCandle[]; currentPrice: number };
-  } | null => {
-    // Generate realistic market data for analysis
+    liveData?: LiveMarketData;
+  } | null> => {
     const entryTime = new Date(Date.now() + 60000); // 1 minute ahead
-    const marketData = generateRealtimeCandles(pair.symbol, 60, entryTime, 'CALL'); // Initial neutral generation
     
-    // Run advanced technical analysis
-    const analysis = analyzeMarketAdvanced(marketData.candles);
+    // Try to fetch real market data from API
+    let liveData: LiveMarketData | null = null;
+    let candlesForAnalysis: MarketCandle[] = [];
+    
+    try {
+      addLog('info', `Fetching real market data for ${pair.symbol}...`);
+      liveData = await fetchMarketData(pair.symbol);
+      
+      if (liveData && liveData.candles.length > 0) {
+        addLog('info', `✅ Live data received: ${liveData.candles.length} candles @ ${liveData.currentPrice.toFixed(5)}`);
+        
+        // Convert API candles to MarketCandle format
+        candlesForAnalysis = liveData.candles.map((c, i) => ({
+          time: new Date(c.time || Date.now() - (liveData!.candles.length - i) * 60000),
+          open: c.open,
+          high: c.high,
+          low: c.low,
+          close: c.close,
+          volume: c.volume || 0,
+        }));
+      } else {
+        addLog('info', `API returned no candles, using simulated data`);
+      }
+    } catch (error) {
+      addLog('info', `API unavailable, using simulated data`);
+    }
+    
+    // Fallback to simulated data if API fails
+    if (candlesForAnalysis.length < 20) {
+      const simulatedData = generateRealtimeCandles(pair.symbol, 60, entryTime, 'CALL');
+      candlesForAnalysis = simulatedData.candles;
+      if (!liveData) {
+        liveData = {
+          candles: candlesForAnalysis.map(c => ({
+            time: c.time.getTime(),
+            open: c.open,
+            high: c.high,
+            low: c.low,
+            close: c.close,
+          })),
+          currentPrice: simulatedData.currentPrice,
+          entryPrice: simulatedData.currentPrice,
+          symbol: pair.symbol,
+          fetchedAt: new Date(),
+        };
+      }
+    }
+    
+    // Run advanced technical analysis on real/simulated data
+    const analysis = analyzeMarketAdvanced(candlesForAnalysis);
     
     if (!analysis) {
       return null;
@@ -182,8 +230,16 @@ ${signal.status === 'mtg' ? `🔄 MTG Step: ${signal.mtgStep}/3\n` : ''}
       return null;
     }
     
-    // Regenerate candles aligned with detected direction for chart accuracy
-    const alignedMarketData = generateRealtimeCandles(pair.symbol, 35, entryTime, analysis.direction);
+    // For chart generation, use real data if available or generate aligned simulated data
+    let chartCandles: MarketCandle[];
+    if (liveData && liveData.candles.length >= 20) {
+      // Use last 35 real candles for chart
+      chartCandles = candlesForAnalysis.slice(-35);
+    } else {
+      // Generate aligned candles for chart
+      const alignedMarketData = generateRealtimeCandles(pair.symbol, 35, entryTime, analysis.direction);
+      chartCandles = alignedMarketData.candles;
+    }
     
     // Log indicator confluence
     const activeIndicators = Object.entries(analysis.indicators)
@@ -191,21 +247,22 @@ ${signal.status === 'mtg' ? `🔄 MTG Step: ${signal.mtgStep}/3\n` : ''}
       .map(([k, v]) => `${k}:${v.signal}`)
       .join(', ');
     
-    addLog('info', `Analysis: ${activeIndicators}`);
-    addLog('info', `Trend: ${analysis.trendStrength > 0.5 ? 'Strong' : 'Moderate'} | Risk: ${analysis.riskLevel}`);
+    addLog('info', `📊 Analysis: ${activeIndicators}`);
+    addLog('info', `📈 Trend: ${analysis.trendStrength > 0.5 ? 'Strong' : 'Moderate'} | Risk: ${analysis.riskLevel}`);
     
     return {
       direction: analysis.direction,
       confidence: analysis.confidence,
       strategy: analysis.strategy,
       marketData: {
-        candles: alignedMarketData.candles,
-        currentPrice: alignedMarketData.currentPrice,
+        candles: chartCandles,
+        currentPrice: liveData?.currentPrice || chartCandles[chartCandles.length - 1].close,
       },
+      liveData: liveData || undefined,
     };
   }, [addLog]);
 
-  const generateSignal = useCallback(() => {
+  const generateSignal = useCallback(async () => {
     const eligiblePairs = activePairs.filter(p => p.isActive);
     if (eligiblePairs.length === 0) {
       addLog('info', 'No active pairs selected');
@@ -215,8 +272,8 @@ ${signal.status === 'mtg' ? `🔄 MTG Step: ${signal.mtgStep}/3\n` : ''}
     // Randomly select a pair
     const pair = getRandomElement(eligiblePairs);
     
-    // Analyze market
-    const analysis = analyzeMarket(pair);
+    // Analyze market (async)
+    const analysis = await analyzeMarket(pair);
     if (!analysis) {
       addLog('info', `No clear signal for ${pair.symbol}`);
       return;
@@ -225,12 +282,14 @@ ${signal.status === 'mtg' ? `🔄 MTG Step: ${signal.mtgStep}/3\n` : ''}
     // Check MTG state
     const mtgState = mtgStateRef.current.get(pair.symbol);
     let mtgStep = 0;
+    let direction = analysis.direction;
+    let strategy = analysis.strategy;
     
     if (mtgState && mtgState.step > 0 && mtgState.step < 3) {
       // Continue MTG sequence
-      analysis.direction = mtgState.lastDirection;
+      direction = mtgState.lastDirection;
       mtgStep = mtgState.step + 1;
-      analysis.strategy = 'MTG Profit Recovery';
+      strategy = 'MTG Profit Recovery';
       addLog('mtg', `MTG Step ${mtgStep}/3 for ${pair.symbol}`);
     }
 
@@ -240,17 +299,24 @@ ${signal.status === 'mtg' ? `🔄 MTG Step: ${signal.mtgStep}/3\n` : ''}
     const signal: Signal = {
       id: generateId(),
       pair: pair.symbol,
-      direction: analysis.direction,
+      direction,
       entryTime: entryTime,
       confidence: analysis.confidence,
-      strategy: analysis.strategy,
+      strategy,
       status: 'active',
       mtgStep,
+      openPrice: analysis.liveData?.entryPrice || analysis.marketData.currentPrice,
     };
 
+    // Record trade entry for real result validation
+    if (analysis.liveData) {
+      recordTradeEntry(signal.id, pair.symbol, direction, analysis.liveData.entryPrice, analysis.liveData);
+      addLog('info', `📝 Entry recorded @ ${analysis.liveData.entryPrice.toFixed(5)}`);
+    }
+
     setSignals(prev => [signal, ...prev].slice(0, 50));
-    addLog('signal', `Signal Generated: ${pair.symbol} ${analysis.direction} (${analysis.confidence}%)`);
-    addLog('info', `Entry in 1 minute - Based on ${analysis.strategy}`);
+    addLog('signal', `🎯 Signal Generated: ${pair.symbol} ${direction} (${analysis.confidence}%)`);
+    addLog('info', `⏰ Entry in 1 minute - Based on ${strategy}`);
 
     // Get current pair stats for telegram
     const currentPairStats = pairStats.get(pair.symbol) || { wins: 0, losses: 0 };
@@ -258,7 +324,7 @@ ${signal.status === 'mtg' ? `🔄 MTG Step: ${signal.mtgStep}/3\n` : ''}
     // Send to Telegram immediately (1 minute before entry) with real market data
     sendToTelegram(signal, false, currentPairStats, undefined, analysis.marketData.candles);
 
-    // Simulate result 2 minutes from now (1 min wait + 1 min trade)
+    // Resolve result 2 minutes from now (1 min wait + 1 min trade)
     setTimeout(() => resolveSignal(signal), 120000);
 
     setStats(prev => ({
@@ -268,12 +334,40 @@ ${signal.status === 'mtg' ? `🔄 MTG Step: ${signal.mtgStep}/3\n` : ''}
     }));
   }, [activePairs, analyzeMarket, addLog, sendToTelegram, pairStats]);
 
-  const resolveSignal = useCallback((signal: Signal) => {
-    // High win rate simulation (90-95%)
-    const winProbability = signal.confidence / 100;
-    const isWin = Math.random() < winProbability;
+  const resolveSignal = useCallback(async (signal: Signal) => {
+    // Try to validate with real market data first
+    let isWin: boolean;
+    let entryPrice = signal.openPrice || 0;
+    let exitPrice = 0;
+    let priceDiff = 0;
+    let usedRealData = false;
+    
+    try {
+      const realResult = await validateTradeResult(signal.id, signal.direction);
+      
+      if (realResult) {
+        // Use REAL market data for result
+        isWin = realResult.isWin;
+        entryPrice = realResult.entryPrice;
+        exitPrice = realResult.exitPrice;
+        priceDiff = realResult.priceDiff;
+        usedRealData = true;
+        
+        addLog('info', `📊 Real validation: Entry ${entryPrice.toFixed(5)} → Exit ${exitPrice.toFixed(5)} (${priceDiff > 0 ? '+' : ''}${priceDiff.toFixed(5)})`);
+      } else {
+        // Fallback to confidence-based simulation
+        const winProbability = signal.confidence / 100;
+        isWin = Math.random() < winProbability;
+        addLog('info', `⚠️ Using simulated result (API unavailable)`);
+      }
+    } catch (error) {
+      // Fallback to confidence-based simulation
+      const winProbability = signal.confidence / 100;
+      isWin = Math.random() < winProbability;
+      addLog('info', `⚠️ Using simulated result (Error: ${error})`);
+    }
 
-    // Calculate the new status first
+    // Calculate the new status
     let newStatus: Signal['status'] = isWin ? 'win' : 'loss';
     let mtgStep = signal.mtgStep || 0;
     
@@ -295,10 +389,12 @@ ${signal.status === 'mtg' ? `🔄 MTG Step: ${signal.mtgStep}/3\n` : ''}
       mtgStateRef.current.delete(signal.pair);
     }
 
-    // Create the resolved signal
+    // Create the resolved signal with price data
     const resolvedSignal: Signal = {
       ...signal,
       status: newStatus,
+      openPrice: entryPrice || signal.openPrice,
+      closePrice: exitPrice || undefined,
     };
 
     // Update signals list
@@ -342,13 +438,14 @@ ${signal.status === 'mtg' ? `🔄 MTG Step: ${signal.mtgStep}/3\n` : ''}
       };
     });
 
-    // Log the ACTUAL result
+    // Log the ACTUAL result with price info
+    const priceInfo = usedRealData ? ` (${entryPrice.toFixed(5)} → ${exitPrice.toFixed(5)})` : '';
     if (newStatus === 'win') {
-      addLog('win', `WIN: ${signal.pair}`);
+      addLog('win', `✅ WIN: ${signal.pair}${priceInfo}`);
     } else if (newStatus === 'mtg') {
-      addLog('win', `MTG WIN: ${signal.pair} (Step ${mtgStep})`);
+      addLog('win', `🔄 MTG WIN: ${signal.pair} (Step ${mtgStep})${priceInfo}`);
     } else {
-      addLog('loss', `LOSS: ${signal.pair}`);
+      addLog('loss', `❌ LOSS: ${signal.pair}${priceInfo}`);
     }
 
     // Send result to Telegram with the captured accurate stats

@@ -26,7 +26,9 @@ export interface LiveMarketData {
   fetchedAt: Date;
 }
 
-const API_BASE_URL = 'http://217.154.173.102:11955/api/market/quotex';
+// Use Cloud proxy to bypass mixed content restrictions
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
+const API_BASE_URL = `${SUPABASE_URL}/functions/v1/market-proxy`;
 
 // Convert pair symbol to API format
 const formatSymbolForApi = (symbol: string): string => {
@@ -46,11 +48,12 @@ export const fetchMarketData = async (symbol: string): Promise<LiveMarketData | 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout
     
-    const response = await fetch(`${API_BASE_URL}/?symbol=${formattedSymbol}`, {
+    const response = await fetch(`${API_BASE_URL}?symbol=${formattedSymbol}`, {
       method: 'GET',
       signal: controller.signal,
       headers: {
         'Accept': 'application/json',
+        'Content-Type': 'application/json',
       },
     });
     

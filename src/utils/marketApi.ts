@@ -40,13 +40,28 @@ const formatSymbolForApi = (symbol: string): string => {
     .replace('/', '');
 };
 
-// Fetch real market data from API
+// API error types for better handling
+export interface ApiError {
+  code: 'TIMEOUT' | 'CONNECTION_REFUSED' | 'API_ERROR' | 'PARSE_ERROR' | 'UNKNOWN';
+  message: string;
+  retryable: boolean;
+}
+
+// Track API status for UI feedback
+let lastApiStatus: { success: boolean; error?: ApiError; timestamp: Date } = {
+  success: true,
+  timestamp: new Date(),
+};
+
+export const getApiStatus = () => lastApiStatus;
+
+// Fetch real market data from API with enhanced error handling
 export const fetchMarketData = async (symbol: string): Promise<LiveMarketData | null> => {
   const formattedSymbol = formatSymbolForApi(symbol);
   
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout
+    const timeoutId = setTimeout(() => controller.abort(), 15000); // 15s timeout (includes proxy retries)
     
     const response = await fetch(`${API_BASE_URL}?symbol=${formattedSymbol}`, {
       method: 'GET',
@@ -60,18 +75,28 @@ export const fetchMarketData = async (symbol: string): Promise<LiveMarketData | 
     clearTimeout(timeoutId);
     
     if (!response.ok) {
-      console.error(`Market API error: ${response.status} ${response.statusText}`);
+      const errorData = await response.json().catch(() => ({}));
+      const apiError: ApiError = {
+        code: errorData.code || 'API_ERROR',
+        message: errorData.error || `API error: ${response.status}`,
+        retryable: errorData.retryable ?? true,
+      };
+      
+      lastApiStatus = { success: false, error: apiError, timestamp: new Date() };
+      console.error(`Market API error [${apiError.code}]: ${apiError.message}`);
       return null;
     }
     
-    const data = await response.json();
+    const responseData = await response.json();
+    
+    // Handle proxy response wrapper
+    const data = responseData.success ? responseData.data : responseData;
     
     // Handle different API response formats
     let candles: MarketTick[] = [];
     let currentPrice = 0;
     
     if (Array.isArray(data)) {
-      // If data is an array of candles
       candles = data.map((item: any) => ({
         time: item.time || item.t || Date.now(),
         open: parseFloat(item.open || item.o || 0),
@@ -82,7 +107,6 @@ export const fetchMarketData = async (symbol: string): Promise<LiveMarketData | 
       }));
       currentPrice = candles.length > 0 ? candles[candles.length - 1].close : 0;
     } else if (data.data && Array.isArray(data.data)) {
-      // If data has a 'data' property with array
       candles = data.data.map((item: any) => ({
         time: item.time || item.t || Date.now(),
         open: parseFloat(item.open || item.o || 0),
@@ -93,9 +117,11 @@ export const fetchMarketData = async (symbol: string): Promise<LiveMarketData | 
       }));
       currentPrice = data.price || data.currentPrice || (candles.length > 0 ? candles[candles.length - 1].close : 0);
     } else if (data.price || data.currentPrice) {
-      // If just price data
       currentPrice = parseFloat(data.price || data.currentPrice);
     }
+    
+    // Update API status on success
+    lastApiStatus = { success: true, timestamp: new Date() };
     
     return {
       candles,
@@ -105,11 +131,22 @@ export const fetchMarketData = async (symbol: string): Promise<LiveMarketData | 
       fetchedAt: new Date(),
     };
   } catch (error) {
-    if (error instanceof Error && error.name === 'AbortError') {
-      console.error('Market API request timeout');
+    let apiError: ApiError;
+    
+    if (error instanceof Error) {
+      if (error.name === 'AbortError') {
+        apiError = { code: 'TIMEOUT', message: 'Request timeout', retryable: true };
+      } else if (error.message.includes('Failed to fetch')) {
+        apiError = { code: 'CONNECTION_REFUSED', message: 'Network error', retryable: true };
+      } else {
+        apiError = { code: 'UNKNOWN', message: error.message, retryable: true };
+      }
     } else {
-      console.error('Market API fetch error:', error);
+      apiError = { code: 'UNKNOWN', message: 'Unknown error', retryable: true };
     }
+    
+    lastApiStatus = { success: false, error: apiError, timestamp: new Date() };
+    console.error(`Market API error [${apiError.code}]: ${apiError.message}`);
     return null;
   }
 };

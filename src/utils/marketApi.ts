@@ -30,6 +30,16 @@ export interface LiveMarketData {
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 const API_BASE_URL = `${SUPABASE_URL}/functions/v1/market-proxy`;
 
+const safeParseJson = async (response: Response): Promise<any | null> => {
+  try {
+    const text = await response.text();
+    if (!text) return null;
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+};
+
 // Convert pair symbol to API format
 const formatSymbolForApi = (symbol: string): string => {
   // Remove spaces and standardize format
@@ -58,6 +68,17 @@ export const getApiStatus = () => lastApiStatus;
 // Fetch real market data from API with enhanced error handling
 export const fetchMarketData = async (symbol: string): Promise<LiveMarketData | null> => {
   const formattedSymbol = formatSymbolForApi(symbol);
+
+  if (!SUPABASE_URL) {
+    const apiError: ApiError = {
+      code: 'UNKNOWN',
+      message: 'Backend URL is not configured',
+      retryable: false,
+    };
+    lastApiStatus = { success: false, error: apiError, timestamp: new Date() };
+    console.error(`Market API error [${apiError.code}]: ${apiError.message}`);
+    return null;
+  }
   
   try {
     const controller = new AbortController();
@@ -73,24 +94,35 @@ export const fetchMarketData = async (symbol: string): Promise<LiveMarketData | 
     });
     
     clearTimeout(timeoutId);
-    
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
+
+    const responseData = await safeParseJson(response);
+    if (!responseData) {
       const apiError: ApiError = {
-        code: errorData.code || 'API_ERROR',
-        message: errorData.error || `API error: ${response.status}`,
-        retryable: errorData.retryable ?? true,
+        code: 'PARSE_ERROR',
+        message: `Invalid JSON from backend (status ${response.status})`,
+        retryable: true,
       };
-      
       lastApiStatus = { success: false, error: apiError, timestamp: new Date() };
       console.error(`Market API error [${apiError.code}]: ${apiError.message}`);
       return null;
     }
-    
-    const responseData = await response.json();
-    
-    // Handle proxy response wrapper
-    const data = responseData.success ? responseData.data : responseData;
+
+    // If backend returns structured status payload
+    if (typeof responseData === 'object' && responseData !== null && 'success' in responseData) {
+      if (responseData.success !== true) {
+        const apiError: ApiError = {
+          code: responseData.code || 'API_ERROR',
+          message: responseData.error || 'Market API error',
+          retryable: responseData.retryable ?? true,
+        };
+        lastApiStatus = { success: false, error: apiError, timestamp: new Date() };
+        console.error(`Market API error [${apiError.code}]: ${apiError.message}`);
+        return null;
+      }
+    }
+
+    // Handle proxy response wrapper OR raw API response
+    const data = responseData?.success ? responseData.data : responseData;
     
     // Handle different API response formats
     let candles: MarketTick[] = [];

@@ -6,6 +6,58 @@ const corsHeaders = {
 };
 
 const MARKET_API_BASE = "http://217.154.173.102:11955/api/market/quotex/";
+const MAX_RETRIES = 3;
+const RETRY_DELAY_MS = 1000;
+
+// Helper to delay execution
+const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+// Fetch with retry logic
+async function fetchWithRetry(url: string, retries = MAX_RETRIES): Promise<Response> {
+  let lastError: Error | null = null;
+  
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 8000); // 8s timeout per attempt
+      
+      const response = await fetch(url, {
+        method: 'GET',
+        signal: controller.signal,
+        headers: { 'Accept': 'application/json' },
+      });
+      
+      clearTimeout(timeoutId);
+      
+      if (response.ok) {
+        return response;
+      }
+      
+      // Non-retryable HTTP errors
+      if (response.status >= 400 && response.status < 500) {
+        throw new Error(`Client error: ${response.status}`);
+      }
+      
+      lastError = new Error(`Server error: ${response.status}`);
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+      
+      // Don't retry on client errors or abort
+      if (lastError.name === 'AbortError') {
+        lastError = new Error('Request timeout');
+      }
+      
+      console.log(`Attempt ${attempt}/${retries} failed: ${lastError.message}`);
+    }
+    
+    // Wait before retry (exponential backoff)
+    if (attempt < retries) {
+      await delay(RETRY_DELAY_MS * attempt);
+    }
+  }
+  
+  throw lastError || new Error('All retry attempts failed');
+}
 
 serve(async (req) => {
   // Handle CORS preflight
@@ -13,49 +65,54 @@ serve(async (req) => {
     return new Response(null, { headers: corsHeaders });
   }
 
+  const url = new URL(req.url);
+  const symbol = url.searchParams.get('symbol');
+
+  if (!symbol) {
+    return new Response(
+      JSON.stringify({ error: 'Missing symbol parameter', code: 'MISSING_PARAM' }),
+      { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    );
+  }
+
+  console.log(`Fetching market data for: ${symbol}`);
+
   try {
-    const url = new URL(req.url);
-    const symbol = url.searchParams.get('symbol');
-
-    if (!symbol) {
-      return new Response(
-        JSON.stringify({ error: 'Missing symbol parameter' }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
-
-    console.log(`Fetching market data for: ${symbol}`);
-
-    // Fetch from the HTTP market API (server-side bypasses mixed content)
-    const response = await fetch(`${MARKET_API_BASE}?symbol=${encodeURIComponent(symbol)}`, {
-      method: 'GET',
-      headers: {
-        'Accept': 'application/json',
-      },
-    });
-
-    if (!response.ok) {
-      console.error(`Market API error: ${response.status}`);
-      return new Response(
-        JSON.stringify({ error: `Market API returned ${response.status}` }),
-        { status: response.status, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
-
+    const response = await fetchWithRetry(`${MARKET_API_BASE}?symbol=${encodeURIComponent(symbol)}`);
     const data = await response.json();
-    console.log(`Market data received for ${symbol}: ${data.candles?.length || 0} candles`);
+    
+    console.log(`Market data received for ${symbol}: ${data.candles?.length || (Array.isArray(data) ? data.length : 0)} candles`);
 
     return new Response(
-      JSON.stringify(data),
+      JSON.stringify({ 
+        success: true, 
+        data,
+        timestamp: Date.now(),
+      }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
 
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : 'Failed to fetch market data';
-    console.error('Proxy error:', errorMessage);
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    const isTimeout = errorMessage.includes('timeout');
+    const isConnectionRefused = errorMessage.includes('Connection refused') || errorMessage.includes('connect error');
+    
+    console.error(`Proxy error for ${symbol}: ${errorMessage}`);
+
+    // Determine error code for frontend handling
+    let code = 'API_ERROR';
+    if (isTimeout) code = 'TIMEOUT';
+    if (isConnectionRefused) code = 'CONNECTION_REFUSED';
+
     return new Response(
-      JSON.stringify({ error: errorMessage }),
-      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      JSON.stringify({ 
+        error: errorMessage, 
+        code,
+        symbol,
+        timestamp: Date.now(),
+        retryable: isConnectionRefused || isTimeout,
+      }),
+      { status: 503, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   }
 });

@@ -14,7 +14,135 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      daily_stats: {
+        Row: {
+          created_at: string
+          date: string
+          id: string
+          losses: number
+          mtg_wins: number
+          total_signals: number
+          updated_at: string
+          win_rate: number | null
+          wins: number
+        }
+        Insert: {
+          created_at?: string
+          date: string
+          id?: string
+          losses?: number
+          mtg_wins?: number
+          total_signals?: number
+          updated_at?: string
+          win_rate?: number | null
+          wins?: number
+        }
+        Update: {
+          created_at?: string
+          date?: string
+          id?: string
+          losses?: number
+          mtg_wins?: number
+          total_signals?: number
+          updated_at?: string
+          win_rate?: number | null
+          wins?: number
+        }
+        Relationships: []
+      }
+      pair_stats: {
+        Row: {
+          created_at: string
+          id: string
+          last_signal_at: string | null
+          losses: number
+          pair: string
+          total_signals: number
+          updated_at: string
+          win_rate: number | null
+          wins: number
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          last_signal_at?: string | null
+          losses?: number
+          pair: string
+          total_signals?: number
+          updated_at?: string
+          win_rate?: number | null
+          wins?: number
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          last_signal_at?: string | null
+          losses?: number
+          pair?: string
+          total_signals?: number
+          updated_at?: string
+          win_rate?: number | null
+          wins?: number
+        }
+        Relationships: []
+      }
+      signals: {
+        Row: {
+          confidence: number
+          created_at: string
+          data_source: string | null
+          direction: string
+          entry_price: number | null
+          entry_time: string
+          exit_price: number | null
+          id: string
+          mtg_step: number | null
+          pair: string
+          price_diff: number | null
+          resolve_time: string | null
+          signal_id: string
+          status: string
+          strategy: string
+          updated_at: string
+        }
+        Insert: {
+          confidence: number
+          created_at?: string
+          data_source?: string | null
+          direction: string
+          entry_price?: number | null
+          entry_time: string
+          exit_price?: number | null
+          id?: string
+          mtg_step?: number | null
+          pair: string
+          price_diff?: number | null
+          resolve_time?: string | null
+          signal_id: string
+          status?: string
+          strategy: string
+          updated_at?: string
+        }
+        Update: {
+          confidence?: number
+          created_at?: string
+          data_source?: string | null
+          direction?: string
+          entry_price?: number | null
+          entry_time?: string
+          exit_price?: number | null
+          id?: string
+          mtg_step?: number | null
+          pair?: string
+          price_diff?: number | null
+          resolve_time?: string | null
+          signal_id?: string
+          status?: string
+          strategy?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never

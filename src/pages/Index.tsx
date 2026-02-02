@@ -10,9 +10,11 @@ import { BotControl } from '@/components/BotControl';
 import { TelegramConfig as TelegramConfigComponent } from '@/components/TelegramConfig';
 import { AnalysisDashboard } from '@/components/AnalysisDashboard';
 import { ChartView } from '@/components/ChartView';
+import { SignalHistory } from '@/components/SignalHistory';
 
 const Index = () => {
-  const [currentView, setCurrentView] = useState<'main' | 'analysis' | 'chart'>('main');
+  const [currentView, setCurrentView] = useState<'main' | 'analysis' | 'chart' | 'history'>('main');
+  const [historyRefreshTrigger, setHistoryRefreshTrigger] = useState(0);
   const [realPairs, setRealPairs] = useState<CurrencyPair[]>(realMarketPairs);
   const [otcPairs, setOtcPairs] = useState<CurrencyPair[]>(otcMarketPairs);
   const [telegramConfig, setTelegramConfig] = useState<TelegramConfig>({
@@ -101,6 +103,10 @@ const Index = () => {
 
         {currentView === 'chart' && (
           <ChartView />
+        )}
+
+        {currentView === 'history' && (
+          <SignalHistory refreshTrigger={historyRefreshTrigger} />
         )}
       </div>
     </div>

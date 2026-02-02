@@ -1,9 +1,9 @@
-import { Rocket, User, ChevronRight, BarChart3, LogOut } from 'lucide-react';
+import { Rocket, User, ChevronRight, BarChart3, LogOut, History } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
 interface HeaderProps {
-  currentView: 'main' | 'analysis' | 'chart';
-  onViewChange: (view: 'main' | 'analysis' | 'chart') => void;
+  currentView: 'main' | 'analysis' | 'chart' | 'history';
+  onViewChange: (view: 'main' | 'analysis' | 'chart' | 'history') => void;
   isOnline: boolean;
 }
 
@@ -60,6 +60,16 @@ export const Header = ({ currentView, onViewChange, isOnline }: HeaderProps) => 
         >
           <BarChart3 className="w-4 h-4" />
           Chart
+        </Button>
+
+        <Button
+          variant={currentView === 'history' ? 'default' : 'outline'}
+          size="sm"
+          onClick={() => onViewChange('history')}
+          className="gap-2 bg-accent/20 hover:bg-accent/30 border-accent/50 text-accent"
+        >
+          <History className="w-4 h-4" />
+          History
         </Button>
 
         <Button

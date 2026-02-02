@@ -4,6 +4,17 @@ import { generateChartImage, blobToBase64 } from '@/utils/chartImageGenerator';
 import { generateRealtimeCandles, MarketCandle } from '@/utils/marketSimulator';
 import { analyzeMarketAdvanced } from '@/utils/technicalAnalysis';
 import { fetchMarketData, recordTradeEntry, validateTradeResult, LiveMarketData, convertToChartCandles } from '@/utils/marketApi';
+import { 
+  saveSignal, 
+  updateSignalResult, 
+  updateDailyStats, 
+  updatePairStats as updateDbPairStats,
+  fetchTodayStats,
+  fetchAllPairStats,
+  fetchRecentSignals,
+  countActiveSignals,
+  getPairStats as getDbPairStats,
+} from '@/services/signalTrackingService';
 
 const generateId = () => Math.random().toString(36).substr(2, 9);
 
@@ -308,10 +319,19 @@ ${signal.status === 'mtg' ? `🔄 MTG Step: ${signal.mtgStep}/3\n` : ''}
       openPrice: analysis.liveData?.entryPrice || analysis.marketData.currentPrice,
     };
 
+    // Determine data source for tracking
+    const dataSource = analysis.liveData ? 'live' : 'simulated';
+
     // Record trade entry for real result validation
     if (analysis.liveData) {
       recordTradeEntry(signal.id, pair.symbol, direction, analysis.liveData.entryPrice, analysis.liveData);
       addLog('info', `📝 Entry recorded @ ${analysis.liveData.entryPrice.toFixed(5)}`);
+    }
+
+    // *** PERSIST SIGNAL TO DATABASE ***
+    const saved = await saveSignal(signal, signal.openPrice || null, dataSource as 'live' | 'simulated');
+    if (saved) {
+      addLog('info', `💾 Signal saved to database (${dataSource})`);
     }
 
     setSignals(prev => [signal, ...prev].slice(0, 50));
@@ -325,7 +345,7 @@ ${signal.status === 'mtg' ? `🔄 MTG Step: ${signal.mtgStep}/3\n` : ''}
     sendToTelegram(signal, false, currentPairStats, undefined, analysis.marketData.candles);
 
     // Resolve result 2 minutes from now (1 min wait + 1 min trade)
-    setTimeout(() => resolveSignal(signal), 120000);
+    setTimeout(() => resolveSignal(signal, dataSource as 'live' | 'simulated'), 120000);
 
     setStats(prev => ({
       ...prev,
@@ -334,13 +354,14 @@ ${signal.status === 'mtg' ? `🔄 MTG Step: ${signal.mtgStep}/3\n` : ''}
     }));
   }, [activePairs, analyzeMarket, addLog, sendToTelegram, pairStats]);
 
-  const resolveSignal = useCallback(async (signal: Signal) => {
+  const resolveSignal = useCallback(async (signal: Signal, initialDataSource: 'live' | 'simulated' = 'simulated') => {
     // Try to validate with real market data first
     let isWin: boolean;
     let entryPrice = signal.openPrice || 0;
     let exitPrice = 0;
     let priceDiff = 0;
     let usedRealData = false;
+    let finalDataSource: 'live' | 'simulated' = initialDataSource;
     
     try {
       const realResult = await validateTradeResult(signal.id, signal.direction);
@@ -352,18 +373,21 @@ ${signal.status === 'mtg' ? `🔄 MTG Step: ${signal.mtgStep}/3\n` : ''}
         exitPrice = realResult.exitPrice;
         priceDiff = realResult.priceDiff;
         usedRealData = true;
+        finalDataSource = 'live';
         
         addLog('info', `📊 Real validation: Entry ${entryPrice.toFixed(5)} → Exit ${exitPrice.toFixed(5)} (${priceDiff > 0 ? '+' : ''}${priceDiff.toFixed(5)})`);
       } else {
         // Fallback to confidence-based simulation
         const winProbability = signal.confidence / 100;
         isWin = Math.random() < winProbability;
+        finalDataSource = 'simulated';
         addLog('info', `⚠️ Using simulated result (API unavailable)`);
       }
     } catch (error) {
       // Fallback to confidence-based simulation
       const winProbability = signal.confidence / 100;
       isWin = Math.random() < winProbability;
+      finalDataSource = 'simulated';
       addLog('info', `⚠️ Using simulated result (Error: ${error})`);
     }
 
@@ -396,6 +420,24 @@ ${signal.status === 'mtg' ? `🔄 MTG Step: ${signal.mtgStep}/3\n` : ''}
       openPrice: entryPrice || signal.openPrice,
       closePrice: exitPrice || undefined,
     };
+
+    // *** PERSIST RESULT TO DATABASE ***
+    const resultSaved = await updateSignalResult(
+      signal.id,
+      newStatus,
+      exitPrice || null,
+      priceDiff || null,
+      finalDataSource
+    );
+    if (resultSaved) {
+      addLog('info', `💾 Result saved to database (${finalDataSource})`);
+    }
+
+    // Update database stats
+    if (newStatus === 'win' || newStatus === 'loss' || newStatus === 'mtg') {
+      await updateDailyStats(newStatus);
+      await updateDbPairStats(signal.pair, newStatus);
+    }
 
     // Update signals list
     setSignals(prev => prev.map(s => s.id === signal.id ? resolvedSignal : s));
@@ -489,6 +531,52 @@ ${signal.status === 'mtg' ? `🔄 MTG Step: ${signal.mtgStep}/3\n` : ''}
       intervalRef.current = null;
     }
     addLog('info', 'Bot Stopped');
+  }, [addLog]);
+
+  // Load persisted stats on mount
+  useEffect(() => {
+    const loadPersistedData = async () => {
+      try {
+        addLog('info', '📊 Loading persisted data...');
+        
+        // Load today's stats
+        const todayStats = await fetchTodayStats();
+        if (todayStats) {
+          setStats(prev => ({
+            ...prev,
+            wins: todayStats.wins,
+            losses: todayStats.losses,
+            mtgWins: todayStats.mtgWins,
+            winRate: todayStats.winRate,
+            totalSignals: todayStats.totalSignals,
+          }));
+          addLog('info', `✅ Loaded today: ${todayStats.wins + todayStats.mtgWins}W/${todayStats.losses}L`);
+        }
+
+        // Load pair stats
+        const persistedPairStats = await fetchAllPairStats();
+        if (persistedPairStats.size > 0) {
+          setPairStats(persistedPairStats);
+          addLog('info', `✅ Loaded ${persistedPairStats.size} pair stats`);
+        }
+
+        // Load recent signals
+        const recentSignals = await fetchRecentSignals(50);
+        if (recentSignals.length > 0) {
+          setSignals(recentSignals);
+          
+          // Count active signals
+          const activeCount = await countActiveSignals();
+          setStats(prev => ({ ...prev, activeSignals: activeCount }));
+          
+          addLog('info', `✅ Loaded ${recentSignals.length} recent signals`);
+        }
+      } catch (error) {
+        addLog('error', `Failed to load persisted data: ${error}`);
+      }
+    };
+
+    loadPersistedData();
   }, [addLog]);
 
   // Cleanup on unmount

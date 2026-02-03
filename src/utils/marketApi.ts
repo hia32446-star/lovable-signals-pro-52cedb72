@@ -196,6 +196,7 @@ interface TradeEntry {
   direction: 'CALL' | 'PUT';
   entryPrice: number;
   entryTime: Date;
+  tradeTime: Date; // The actual candle time for the trade
   marketData: LiveMarketData;
 }
 
@@ -208,12 +209,19 @@ export const recordTradeEntry = (
   entryPrice: number,
   marketData: LiveMarketData
 ): void => {
+  const now = new Date();
+  // Trade candle is the next minute (signal sent 1 min before)
+  const tradeTime = new Date(now.getTime());
+  tradeTime.setSeconds(0, 0);
+  tradeTime.setMinutes(tradeTime.getMinutes() + 1);
+  
   activeTradeEntries.set(signalId, {
     signalId,
     pair,
     direction,
     entryPrice,
-    entryTime: new Date(),
+    entryTime: now,
+    tradeTime,
     marketData,
   });
 };
@@ -226,11 +234,59 @@ export const clearTradeEntry = (signalId: string): void => {
   activeTradeEntries.delete(signalId);
 };
 
-// Validate trade result using real market data
+// Get the specific candle for a given trade time
+export const getTradeCandle = async (
+  symbol: string,
+  tradeTime: Date
+): Promise<{ open: number; close: number; high: number; low: number } | null> => {
+  const data = await fetchMarketData(symbol);
+  
+  if (!data || data.candles.length === 0) {
+    return null;
+  }
+  
+  // Find the candle that matches the trade time (compare minute precision)
+  const tradeMinute = Math.floor(tradeTime.getTime() / 60000);
+  
+  for (const candle of data.candles) {
+    const candleMinute = Math.floor(candle.time / 60000);
+    if (candleMinute === tradeMinute) {
+      return {
+        open: candle.open,
+        close: candle.close,
+        high: candle.high,
+        low: candle.low,
+      };
+    }
+  }
+  
+  // If exact match not found, return the most recent candle
+  const lastCandle = data.candles[data.candles.length - 1];
+  return {
+    open: lastCandle.open,
+    close: lastCandle.close,
+    high: lastCandle.high,
+    low: lastCandle.low,
+  };
+};
+
+// Accurate result validation using candle open/close comparison
+// This follows the Python bot's logic exactly:
+// - If close > open → Candle direction is CALL (bullish)
+// - If close < open → Candle direction is PUT (bearish)
+// - If close == open → DOJI (counts as WIN)
+// - Win if signal direction matches candle direction
 export const validateTradeResult = async (
   signalId: string, 
   direction: 'CALL' | 'PUT'
-): Promise<{ isWin: boolean; entryPrice: number; exitPrice: number; priceDiff: number } | null> => {
+): Promise<{ 
+  isWin: boolean; 
+  entryPrice: number; 
+  exitPrice: number; 
+  priceDiff: number;
+  candleDirection: 'CALL' | 'PUT' | 'DOJI';
+  validationMethod: 'candle_direction' | 'price_comparison';
+} | null> => {
   const entry = activeTradeEntries.get(signalId);
   
   if (!entry) {
@@ -238,20 +294,79 @@ export const validateTradeResult = async (
     return null;
   }
   
-  // Fetch current price for exit
+  // Try to get the exact trade candle for accurate validation
+  const tradeCandle = await getTradeCandle(entry.pair, entry.tradeTime);
+  
+  if (!tradeCandle) {
+    console.error('Could not fetch trade candle for:', entry.pair);
+    // Clean up entry
+    activeTradeEntries.delete(signalId);
+    return null;
+  }
+  
+  const { open, close } = tradeCandle;
+  
+  // Determine candle direction using Python bot's logic
+  let candleDirection: 'CALL' | 'PUT' | 'DOJI';
+  if (close > open) {
+    candleDirection = 'CALL';
+  } else if (close < open) {
+    candleDirection = 'PUT';
+  } else {
+    candleDirection = 'DOJI';
+  }
+  
+  // Determine result:
+  // - DOJI always counts as WIN (market indecision, no clear loser)
+  // - Otherwise, signal direction must match candle direction to WIN
+  let isWin: boolean;
+  if (candleDirection === 'DOJI') {
+    isWin = true; // DOJI always counts as WIN per Python bot logic
+    console.log(`DOJI detected - counting as WIN for ${entry.pair}`);
+  } else {
+    isWin = direction === candleDirection;
+  }
+  
+  const priceDiff = close - open;
+  
+  console.log(`Trade validation for ${entry.pair}:`);
+  console.log(`  Signal: ${direction}, Candle: ${candleDirection}`);
+  console.log(`  Open: ${open.toFixed(5)}, Close: ${close.toFixed(5)}, Diff: ${priceDiff.toFixed(5)}`);
+  console.log(`  Result: ${isWin ? 'WIN' : 'LOSS'}`);
+  
+  // Clean up entry
+  activeTradeEntries.delete(signalId);
+  
+  return {
+    isWin,
+    entryPrice: open,
+    exitPrice: close,
+    priceDiff,
+    candleDirection,
+    validationMethod: 'candle_direction',
+  };
+};
+
+// Legacy price comparison method (fallback)
+export const validateTradeResultByPrice = async (
+  signalId: string, 
+  direction: 'CALL' | 'PUT'
+): Promise<{ isWin: boolean; entryPrice: number; exitPrice: number; priceDiff: number } | null> => {
+  const entry = activeTradeEntries.get(signalId);
+  
+  if (!entry) {
+    return null;
+  }
+  
   const exitPrice = await getCurrentPrice(entry.pair);
   
   if (exitPrice === null) {
-    console.error('Could not fetch exit price for:', entry.pair);
     return null;
   }
   
   const priceDiff = exitPrice - entry.entryPrice;
-  
-  // CALL wins if price went UP, PUT wins if price went DOWN
   const isWin = direction === 'CALL' ? priceDiff > 0 : priceDiff < 0;
   
-  // Clean up entry
   activeTradeEntries.delete(signalId);
   
   return {

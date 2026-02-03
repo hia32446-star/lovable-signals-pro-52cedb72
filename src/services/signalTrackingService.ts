@@ -52,6 +52,7 @@ export const dbSignalToSignal = (db: DbSignal): Signal => ({
   openPrice: db.entry_price ?? undefined,
   closePrice: db.exit_price ?? undefined,
   mtgStep: db.mtg_step,
+  dataSource: (db.data_source as 'live' | 'simulated') || 'simulated',
 });
 
 // Save a new signal to the database

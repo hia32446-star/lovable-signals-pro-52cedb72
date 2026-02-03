@@ -20,6 +20,7 @@ export interface Signal {
   openPrice?: number;
   closePrice?: number;
   mtgStep?: number;
+  dataSource?: 'live' | 'simulated';
 }
 
 export interface TradingStats {

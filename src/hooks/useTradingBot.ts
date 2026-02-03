@@ -355,27 +355,34 @@ ${signal.status === 'mtg' ? `🔄 MTG Step: ${signal.mtgStep}/3\n` : ''}
   }, [activePairs, analyzeMarket, addLog, sendToTelegram, pairStats]);
 
   const resolveSignal = useCallback(async (signal: Signal, initialDataSource: 'live' | 'simulated' = 'simulated') => {
-    // Try to validate with real market data first
+    // Try to validate with real market data using candle direction comparison
+    // This follows the Python bot's accurate validation logic
     let isWin: boolean;
     let entryPrice = signal.openPrice || 0;
     let exitPrice = 0;
     let priceDiff = 0;
     let usedRealData = false;
     let finalDataSource: 'live' | 'simulated' = initialDataSource;
+    let candleDirection: 'CALL' | 'PUT' | 'DOJI' | null = null;
     
     try {
       const realResult = await validateTradeResult(signal.id, signal.direction);
       
       if (realResult) {
-        // Use REAL market data for result
+        // Use REAL market candle data for accurate result
+        // Python bot logic: compare candle open vs close to determine direction
         isWin = realResult.isWin;
         entryPrice = realResult.entryPrice;
         exitPrice = realResult.exitPrice;
         priceDiff = realResult.priceDiff;
+        candleDirection = realResult.candleDirection;
         usedRealData = true;
         finalDataSource = 'live';
         
-        addLog('info', `📊 Real validation: Entry ${entryPrice.toFixed(5)} → Exit ${exitPrice.toFixed(5)} (${priceDiff > 0 ? '+' : ''}${priceDiff.toFixed(5)})`);
+        // Log accurate validation with candle direction
+        const directionEmoji = candleDirection === 'CALL' ? '📈' : candleDirection === 'PUT' ? '📉' : '➖';
+        addLog('info', `📊 Real validation: Open ${entryPrice.toFixed(5)} → Close ${exitPrice.toFixed(5)}`);
+        addLog('info', `${directionEmoji} Candle: ${candleDirection} | Signal: ${signal.direction} → ${isWin ? '✅ MATCH' : '❌ MISMATCH'}`);
       } else {
         // Fallback to confidence-based simulation
         const winProbability = signal.confidence / 100;
@@ -395,7 +402,7 @@ ${signal.status === 'mtg' ? `🔄 MTG Step: ${signal.mtgStep}/3\n` : ''}
     let newStatus: Signal['status'] = isWin ? 'win' : 'loss';
     let mtgStep = signal.mtgStep || 0;
     
-    // MTG logic determination
+    // MTG logic determination (follows Python bot's martingale system)
     if (!isWin && mtgStep < 3) {
       // Start or continue MTG sequence
       mtgStateRef.current.set(signal.pair, {
@@ -430,7 +437,8 @@ ${signal.status === 'mtg' ? `🔄 MTG Step: ${signal.mtgStep}/3\n` : ''}
       finalDataSource
     );
     if (resultSaved) {
-      addLog('info', `💾 Result saved to database (${finalDataSource})`);
+      const sourceEmoji = finalDataSource === 'live' ? '🔴' : '⚪';
+      addLog('info', `💾 Result saved (${sourceEmoji} ${finalDataSource.toUpperCase()})${candleDirection ? ` - Candle: ${candleDirection}` : ''}`);
     }
 
     // Update database stats

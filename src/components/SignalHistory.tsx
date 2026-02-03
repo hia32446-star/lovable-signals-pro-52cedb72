@@ -202,6 +202,7 @@ export const SignalHistory = ({ refreshTrigger }: SignalHistoryProps) => {
                   <TableHead className="text-muted-foreground">Confidence</TableHead>
                   <TableHead className="text-muted-foreground">Entry</TableHead>
                   <TableHead className="text-muted-foreground">Exit</TableHead>
+                  <TableHead className="text-muted-foreground">Source</TableHead>
                   <TableHead className="text-muted-foreground">Result</TableHead>
                 </TableRow>
               </TableHeader>
@@ -236,12 +237,23 @@ export const SignalHistory = ({ refreshTrigger }: SignalHistoryProps) => {
                     <TableCell className="font-mono text-xs">
                       {signal.closePrice?.toFixed(5) || '-'}
                     </TableCell>
+                    <TableCell>
+                      {signal.dataSource === 'live' ? (
+                        <Badge className="bg-success/20 text-success border-success/30 text-xs">
+                          🔴 LIVE
+                        </Badge>
+                      ) : (
+                        <Badge variant="outline" className="text-muted-foreground text-xs">
+                          ⚪ SIM
+                        </Badge>
+                      )}
+                    </TableCell>
                     <TableCell>{getStatusBadge(signal.status)}</TableCell>
                   </TableRow>
                 ))}
                 {signals.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={8} className="text-center text-muted-foreground py-8">
+                    <TableCell colSpan={9} className="text-center text-muted-foreground py-8">
                       No signals recorded yet. Start the bot to generate signals.
                     </TableCell>
                   </TableRow>

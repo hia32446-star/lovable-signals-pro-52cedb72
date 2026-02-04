@@ -1,4 +1,5 @@
 import { SignalDirection } from '@/types/trading';
+import { analyzeCandlestickPatterns, CandleData, CandlestickAnalysis } from './candlestickPatterns';
 
 // Technical Indicator Interfaces
 interface OHLC {
@@ -6,6 +7,7 @@ interface OHLC {
   high: number;
   low: number;
   close: number;
+  time?: Date;
 }
 
 interface IndicatorResult {
@@ -21,6 +23,7 @@ interface AnalysisResult {
   indicators: Record<string, IndicatorResult>;
   trendStrength: number;
   riskLevel: 'low' | 'medium' | 'high';
+  candlestickPatterns?: CandlestickAnalysis;
 }
 
 // ==================== TECHNICAL INDICATORS ====================
@@ -356,6 +359,16 @@ export const analyzeMarketAdvanced = (candles: OHLC[]): AnalysisResult | null =>
   // Trend analysis
   const trend = detectTrend(closePrices);
 
+  // Candlestick Pattern Analysis (NEW)
+  const candleDataForPatterns: CandleData[] = candles.map((c, i) => ({
+    time: (c as any).time || new Date(Date.now() - (candles.length - i) * 60000),
+    open: c.open,
+    high: c.high,
+    low: c.low,
+    close: c.close,
+  }));
+  const candlestickPatterns = analyzeCandlestickPatterns(candleDataForPatterns);
+
   // Confluence scoring
   let bullishScore = 0;
   let bearishScore = 0;
@@ -402,20 +415,42 @@ export const analyzeMarketAdvanced = (candles: OHLC[]): AnalysisResult | null =>
     totalWeight += 2;
   }
 
+  // Candlestick Pattern Bonus (HIGH WEIGHT - from Python bot)
+  if (candlestickPatterns.patterns.length > 0) {
+    const patternWeight = 4.0; // High weight for candlestick patterns
+    totalWeight += patternWeight;
+    
+    candlestickPatterns.patterns.forEach(pattern => {
+      if (pattern.direction === 'CALL') {
+        bullishScore += patternWeight * pattern.confidence;
+      } else {
+        bearishScore += patternWeight * pattern.confidence;
+      }
+    });
+  }
+
   // Calculate confluence score
   const maxScore = Math.max(bullishScore, bearishScore);
   const confluenceRatio = maxScore / totalWeight;
 
-  // Minimum threshold for signal generation
-  if (confluenceRatio < 0.35) {
+  // Minimum threshold for signal generation (lowered if strong pattern detected)
+  const minThreshold = candlestickPatterns.patternStrength > 0.8 ? 0.25 : 0.35;
+  if (confluenceRatio < minThreshold) {
     return null; // No clear signal
   }
 
   const direction: SignalDirection = bullishScore > bearishScore ? 'CALL' : 'PUT';
 
   // Confidence calculation (90-98% range for high accuracy)
-  const baseConfidence = 90;
+  // Boost confidence if candlestick patterns confirm direction
+  let baseConfidence = 90;
   const maxConfidence = 98;
+  
+  // Pattern confirmation boost
+  if (candlestickPatterns.dominantDirection === direction && candlestickPatterns.patternStrength > 0.7) {
+    baseConfidence += 2; // Extra 2% for pattern confirmation
+  }
+  
   const confidence = Math.min(maxConfidence, baseConfidence + (confluenceRatio * (maxConfidence - baseConfidence)));
 
   // Risk assessment
@@ -427,33 +462,31 @@ export const analyzeMarketAdvanced = (candles: OHLC[]): AnalysisResult | null =>
   } else if (adx.value < 20 || confluenceRatio < 0.4) {
     riskLevel = 'high'; // Weak trend or low confluence
   }
+  
+  // Strong candlestick pattern reduces risk
+  if (candlestickPatterns.patternStrength > 0.85 && candlestickPatterns.dominantDirection === direction) {
+    riskLevel = riskLevel === 'high' ? 'medium' : 'low';
+  }
 
   // Strategy selection based on conditions
   let strategy = 'Multi-Indicator Confluence';
 
-  if (rsi.signal !== 'neutral' && rsi.strength > 0.5) {
+  // Prioritize candlestick patterns for strategy naming (like Python bot)
+  if (candlestickPatterns.primaryPattern && candlestickPatterns.patternStrength > 0.7) {
+    strategy = candlestickPatterns.primaryPattern;
+  } else if (rsi.signal !== 'neutral' && rsi.strength > 0.5) {
     if (rsi.value < 30 || rsi.value > 70) {
       strategy = direction === 'CALL' ? 'RSI Oversold Bounce' : 'RSI Overbought Reversal';
     }
-  }
-
-  if (macd.strength > 0.5 && macd.signal !== 'neutral') {
+  } else if (macd.strength > 0.5 && macd.signal !== 'neutral') {
     strategy = 'MACD Crossover Strategy';
-  }
-
-  if (stochastic.strength > 0.6) {
+  } else if (stochastic.strength > 0.6) {
     strategy = direction === 'CALL' ? 'Stochastic Oversold Recovery' : 'Stochastic Overbought Pullback';
-  }
-
-  if (bollinger.strength > 0.5 && trend.strength > 0.5) {
+  } else if (bollinger.strength > 0.5 && trend.strength > 0.5) {
     strategy = direction === 'CALL' ? 'Bollinger Band Bounce' : 'Bollinger Band Rejection';
-  }
-
-  if (trend.strength > 0.7 && adx.value > 25) {
+  } else if (trend.strength > 0.7 && adx.value > 25) {
     strategy = direction === 'CALL' ? 'Strong Uptrend Continuation' : 'Strong Downtrend Continuation';
-  }
-
-  if (confluenceRatio > 0.6 && Object.values(indicators).filter(i => i.signal === direction.toLowerCase()).length >= 5) {
+  } else if (confluenceRatio > 0.6 && Object.values(indicators).filter(i => i.signal === direction.toLowerCase()).length >= 5) {
     strategy = 'Maximum Confluence Entry';
   }
 
@@ -464,5 +497,6 @@ export const analyzeMarketAdvanced = (candles: OHLC[]): AnalysisResult | null =>
     indicators,
     trendStrength: trend.strength,
     riskLevel,
+    candlestickPatterns,
   };
 };

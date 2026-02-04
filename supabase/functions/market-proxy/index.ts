@@ -5,7 +5,7 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version',
 };
 
-const MARKET_API_BASE = "http://217.154.173.102:11955/api/market/quotex/";
+const MARKET_API_BASE = "https://mrbeaxt.site/Qx/Qx.php";
 const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 1000;
 
@@ -78,7 +78,7 @@ serve(async (req) => {
   console.log(`Fetching market data for: ${symbol}`);
 
   try {
-    const response = await fetchWithRetry(`${MARKET_API_BASE}?symbol=${encodeURIComponent(symbol)}`);
+    const response = await fetchWithRetry(`${MARKET_API_BASE}?pair=${encodeURIComponent(symbol)}&timeframe=M1&limit=1000&format=json`);
     const data = await response.json();
     
     console.log(`Market data received for ${symbol}: ${data.candles?.length || (Array.isArray(data) ? data.length : 0)} candles`);

@@ -42,10 +42,10 @@ const safeParseJson = async (response: Response): Promise<any | null> => {
 
 // Convert pair symbol to API format
 const formatSymbolForApi = (symbol: string): string => {
-  // Remove spaces and standardize format
-  // Examples: "EUR/USD (OTC)" -> "EURUSD-OTC", "BRLUSD-OTC" -> "BRLUSD-OTC"
+  // Convert to API format: "EUR/USD (OTC)" -> "EURUSD_otc", "BRLUSD-OTC" -> "BRLUSD_otc"
   return symbol
-    .replace(/\s*\(OTC\)\s*/i, '-OTC')
+    .replace(/\s*\(OTC\)\s*/i, '_otc')
+    .replace('-OTC', '_otc')
     .replace(/\s+/g, '')
     .replace('/', '');
 };
@@ -128,29 +128,35 @@ export const fetchMarketData = async (symbol: string): Promise<LiveMarketData | 
     let candles: MarketTick[] = [];
     let currentPrice = 0;
     
-    if (Array.isArray(data)) {
-      candles = data.map((item: any) => ({
-        time: item.time || item.t || Date.now(),
-        open: parseFloat(item.open || item.o || 0),
-        high: parseFloat(item.high || item.h || 0),
-        low: parseFloat(item.low || item.l || 0),
-        close: parseFloat(item.close || item.c || 0),
-        volume: parseFloat(item.volume || item.v || 0),
-      }));
+    // New API format: { data: [{ pair, candle_time, open, high, low, close }] }
+    if (data?.data && Array.isArray(data.data)) {
+      candles = data.data
+        .filter((item: any) => item.pair === formattedSymbol || !item.pair) // Filter by pair if present
+        .map((item: any) => ({
+          time: item.candle_time ? new Date(item.candle_time).getTime() : (item.time || item.t || Date.now()),
+          open: parseFloat(item.open || item.o || 0),
+          high: parseFloat(item.high || item.h || 0),
+          low: parseFloat(item.low || item.l || 0),
+          close: parseFloat(item.close || item.c || 0),
+          volume: parseFloat(item.volume || item.v || 0),
+        }))
+        .sort((a: MarketTick, b: MarketTick) => a.time - b.time); // Sort oldest first
       currentPrice = candles.length > 0 ? candles[candles.length - 1].close : 0;
-    } else if (data.data && Array.isArray(data.data)) {
-      candles = data.data.map((item: any) => ({
-        time: item.time || item.t || Date.now(),
+    } else if (Array.isArray(data)) {
+      candles = data.map((item: any) => ({
+        time: item.candle_time ? new Date(item.candle_time).getTime() : (item.time || item.t || Date.now()),
         open: parseFloat(item.open || item.o || 0),
         high: parseFloat(item.high || item.h || 0),
         low: parseFloat(item.low || item.l || 0),
         close: parseFloat(item.close || item.c || 0),
         volume: parseFloat(item.volume || item.v || 0),
-      }));
-      currentPrice = data.price || data.currentPrice || (candles.length > 0 ? candles[candles.length - 1].close : 0);
+      })).sort((a: MarketTick, b: MarketTick) => a.time - b.time);
+      currentPrice = candles.length > 0 ? candles[candles.length - 1].close : 0;
     } else if (data.price || data.currentPrice) {
       currentPrice = parseFloat(data.price || data.currentPrice);
     }
+    
+    console.log(`Fetched ${candles.length} candles for ${formattedSymbol}, current price: ${currentPrice}`);
     
     // Update API status on success
     lastApiStatus = { success: true, timestamp: new Date() };

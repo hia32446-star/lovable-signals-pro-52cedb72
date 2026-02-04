@@ -81,7 +81,9 @@ serve(async (req) => {
     const response = await fetchWithRetry(`${MARKET_API_BASE}?pair=${encodeURIComponent(symbol)}&timeframe=M1&limit=1000&format=json`);
     const data = await response.json();
     
-    console.log(`Market data received for ${symbol}: ${data.candles?.length || (Array.isArray(data) ? data.length : 0)} candles`);
+    // Log candle count from correct location in response
+    const candleCount = data?.data?.length || data?.count || (Array.isArray(data) ? data.length : 0);
+    console.log(`Market data received for ${symbol}: ${candleCount} candles`);
 
     return new Response(
       JSON.stringify({

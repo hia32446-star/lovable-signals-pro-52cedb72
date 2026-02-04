@@ -40,14 +40,21 @@ const safeParseJson = async (response: Response): Promise<any | null> => {
   }
 };
 
-// Convert pair symbol to API format
+// Convert pair symbol to API format (ensure _otc suffix)
 const formatSymbolForApi = (symbol: string): string => {
-  // Convert to API format: "EUR/USD (OTC)" -> "EURUSD_otc", "BRLUSD-OTC" -> "BRLUSD_otc"
-  return symbol
-    .replace(/\s*\(OTC\)\s*/i, '_otc')
-    .replace('-OTC', '_otc')
-    .replace(/\s+/g, '')
-    .replace('/', '');
+  // Clean the symbol first
+  let formatted = symbol
+    .replace(/\s*\(OTC\)\s*/i, '') // Remove (OTC)
+    .replace('-OTC', '')           // Remove -OTC
+    .replace(/\s+/g, '')           // Remove spaces
+    .replace('/', '');             // Remove slash
+  
+  // Always ensure _otc suffix for API compatibility
+  if (!formatted.toLowerCase().endsWith('_otc')) {
+    formatted = formatted + '_otc';
+  }
+  
+  return formatted;
 };
 
 // API error types for better handling

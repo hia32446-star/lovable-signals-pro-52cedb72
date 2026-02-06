@@ -38,7 +38,9 @@ export const SignalHistory = ({ refreshTrigger }: SignalHistoryProps) => {
       case 'loss':
         return <Badge variant="destructive">LOSS</Badge>;
       case 'mtg':
-        return <Badge className="bg-primary text-primary-foreground">MTG</Badge>;
+        return <Badge className="bg-primary text-primary-foreground">MTG WIN</Badge>;
+      case 'mtg_pending':
+        return <Badge variant="outline" className="animate-pulse text-warning border-warning/50">MTG...</Badge>;
       case 'active':
         return <Badge variant="outline" className="animate-pulse">ACTIVE</Badge>;
       default:

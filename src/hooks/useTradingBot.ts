@@ -404,23 +404,35 @@ ${signal.status === 'mtg' ? `🔄 MTG Step: ${signal.mtgStep}/3\n` : ''}
     // Calculate the new status
     let newStatus: Signal['status'] = isWin ? 'win' : 'loss';
     let mtgStep = signal.mtgStep || 0;
+    // Track whether this is a final result that should update stats
+    let isFinalResult = true;
     
     // MTG logic determination (follows Python bot's martingale system)
     if (!isWin && mtgStep < 3) {
-      // Start or continue MTG sequence
+      // Start or continue MTG sequence — NOT a final result yet
       mtgStateRef.current.set(signal.pair, {
         step: mtgStep + 1,
         lastDirection: signal.direction,
       });
+      newStatus = 'mtg_pending'; // Intermediate loss, waiting for MTG recovery
+      isFinalResult = false;
+      addLog('mtg', `🔄 MTG triggered for ${signal.pair} — advancing to step ${mtgStep + 1}/3`);
+    } else if (!isWin && mtgStep >= 3) {
+      // All MTG levels exhausted — FINAL LOSS
       newStatus = 'loss';
+      mtgStateRef.current.delete(signal.pair);
+      isFinalResult = true;
+      addLog('loss', `💀 All MTG levels failed for ${signal.pair} — FINAL LOSS`);
     } else if (isWin && mtgStep > 0) {
       // MTG win - recovered through martingale
       newStatus = 'mtg';
       mtgStateRef.current.delete(signal.pair);
+      isFinalResult = true;
     } else if (isWin) {
       // Regular win
       newStatus = 'win';
       mtgStateRef.current.delete(signal.pair);
+      isFinalResult = true;
     }
 
     // Create the resolved signal with price data
@@ -444,68 +456,76 @@ ${signal.status === 'mtg' ? `🔄 MTG Step: ${signal.mtgStep}/3\n` : ''}
       addLog('info', `💾 Result saved (${sourceEmoji} ${finalDataSource.toUpperCase()})${candleDirection ? ` - Candle: ${candleDirection}` : ''}`);
     }
 
-    // Update database stats
-    if (newStatus === 'win' || newStatus === 'loss' || newStatus === 'mtg') {
-      await updateDailyStats(newStatus);
-      await updateDbPairStats(signal.pair, newStatus);
-    }
-
-    // Update signals list
-    setSignals(prev => prev.map(s => s.id === signal.id ? resolvedSignal : s));
-
-    // Update pair stats atomically and capture the new values
-    let capturedPairStats: PairStats = { wins: 0, losses: 0 };
-    setPairStats(prev => {
-      const updated = new Map(prev);
-      const current = prev.get(signal.pair) || { wins: 0, losses: 0 };
-      
-      if (newStatus === 'win' || newStatus === 'mtg') {
-        capturedPairStats = { wins: current.wins + 1, losses: current.losses };
-      } else {
-        capturedPairStats = { wins: current.wins, losses: current.losses + 1 };
+    // Only update stats and send result to Telegram on FINAL results
+    if (isFinalResult) {
+      // Update database stats
+      if (newStatus === 'win' || newStatus === 'loss' || newStatus === 'mtg') {
+        await updateDailyStats(newStatus);
+        await updateDbPairStats(signal.pair, newStatus);
       }
-      
-      updated.set(signal.pair, capturedPairStats);
-      return updated;
-    });
 
-    // Update global stats atomically and capture for Telegram
-    let capturedGlobalStats = { wins: 0, losses: 0, mtgWins: 0 };
-    setStats(prev => {
-      const newWins = newStatus === 'win' ? prev.wins + 1 : prev.wins;
-      const newMtgWins = newStatus === 'mtg' ? prev.mtgWins + 1 : prev.mtgWins;
-      const newLosses = newStatus === 'loss' ? prev.losses + 1 : prev.losses;
-      const totalDecided = newWins + newMtgWins + newLosses;
-      const newWinRate = totalDecided > 0 ? ((newWins + newMtgWins) / totalDecided) * 100 : 0;
-      
-      // Capture for Telegram - these are the ACTUAL new values
-      capturedGlobalStats = { wins: newWins, losses: newLosses, mtgWins: newMtgWins };
-      
-      return {
-        ...prev,
-        wins: newWins,
-        losses: newLosses,
-        mtgWins: newMtgWins,
-        activeSignals: Math.max(0, prev.activeSignals - 1),
-        winRate: newWinRate,
-      };
-    });
+      // Update signals list
+      setSignals(prev => prev.map(s => s.id === signal.id ? resolvedSignal : s));
 
-    // Log the ACTUAL result with price info
-    const priceInfo = usedRealData ? ` (${entryPrice.toFixed(5)} → ${exitPrice.toFixed(5)})` : '';
-    if (newStatus === 'win') {
-      addLog('win', `✅ WIN: ${signal.pair}${priceInfo}`);
-    } else if (newStatus === 'mtg') {
-      addLog('win', `🔄 MTG WIN: ${signal.pair} (Step ${mtgStep})${priceInfo}`);
+      // Update pair stats atomically and capture the new values
+      let capturedPairStats: PairStats = { wins: 0, losses: 0 };
+      setPairStats(prev => {
+        const updated = new Map(prev);
+        const current = prev.get(signal.pair) || { wins: 0, losses: 0 };
+        
+        if (newStatus === 'win' || newStatus === 'mtg') {
+          capturedPairStats = { wins: current.wins + 1, losses: current.losses };
+        } else {
+          capturedPairStats = { wins: current.wins, losses: current.losses + 1 };
+        }
+        
+        updated.set(signal.pair, capturedPairStats);
+        return updated;
+      });
+
+      // Update global stats atomically and capture for Telegram
+      let capturedGlobalStats = { wins: 0, losses: 0, mtgWins: 0 };
+      setStats(prev => {
+        const newWins = newStatus === 'win' ? prev.wins + 1 : prev.wins;
+        const newMtgWins = newStatus === 'mtg' ? prev.mtgWins + 1 : prev.mtgWins;
+        const newLosses = newStatus === 'loss' ? prev.losses + 1 : prev.losses;
+        const totalDecided = newWins + newMtgWins + newLosses;
+        const newWinRate = totalDecided > 0 ? ((newWins + newMtgWins) / totalDecided) * 100 : 0;
+        
+        capturedGlobalStats = { wins: newWins, losses: newLosses, mtgWins: newMtgWins };
+        
+        return {
+          ...prev,
+          wins: newWins,
+          losses: newLosses,
+          mtgWins: newMtgWins,
+          activeSignals: Math.max(0, prev.activeSignals - 1),
+          winRate: newWinRate,
+        };
+      });
+
+      // Log the ACTUAL final result with price info
+      const priceInfo = usedRealData ? ` (${entryPrice.toFixed(5)} → ${exitPrice.toFixed(5)})` : '';
+      if (newStatus === 'win') {
+        addLog('win', `✅ NORMAL WIN: ${signal.pair}${priceInfo}`);
+      } else if (newStatus === 'mtg') {
+        addLog('win', `🔄 MTG WIN: ${signal.pair} (Step ${mtgStep}/3)${priceInfo}`);
+      } else {
+        addLog('loss', `❌ FINAL LOSS: ${signal.pair} (all MTG levels failed)${priceInfo}`);
+      }
+
+      // Send result to Telegram with accurate stats
+      setTimeout(() => {
+        sendToTelegram(resolvedSignal, true, capturedPairStats, capturedGlobalStats);
+      }, 50);
     } else {
-      addLog('loss', `❌ LOSS: ${signal.pair}${priceInfo}`);
+      // MTG pending — just update the signal list UI but don't count in stats
+      setSignals(prev => prev.map(s => s.id === signal.id ? resolvedSignal : s));
+      setStats(prev => ({
+        ...prev,
+        activeSignals: Math.max(0, prev.activeSignals - 1),
+      }));
     }
-
-    // Send result to Telegram with the captured accurate stats
-    // Using setTimeout to ensure React has processed state updates
-    setTimeout(() => {
-      sendToTelegram(resolvedSignal, true, capturedPairStats, capturedGlobalStats);
-    }, 50);
   }, [addLog, sendToTelegram]);
 
   const startBot = useCallback(() => {

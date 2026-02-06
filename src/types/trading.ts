@@ -1,6 +1,6 @@
 export type MarketType = 'real' | 'otc';
 export type SignalDirection = 'CALL' | 'PUT';
-export type SignalStatus = 'pending' | 'active' | 'win' | 'loss' | 'mtg';
+export type SignalStatus = 'pending' | 'active' | 'win' | 'loss' | 'mtg' | 'mtg_pending';
 
 export interface CurrencyPair {
   symbol: string;

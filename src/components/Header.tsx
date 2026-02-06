@@ -27,10 +27,15 @@ export const Header = ({ currentView, onViewChange, isOnline }: HeaderProps) => 
           </span>
         </div>
 
-        <div className="flex items-center gap-2 px-3 py-1.5 bg-secondary rounded-lg">
+        <a
+          href="https://t.me/TALHA_XYZ"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="flex items-center gap-2 px-3 py-1.5 bg-secondary rounded-lg cursor-pointer hover:bg-secondary/80 transition-colors"
+        >
           <User className="w-4 h-4 text-muted-foreground" />
-          <span className="text-sm">x_trader_pro</span>
-        </div>
+          <span className="text-sm">TALHA_XYZ</span>
+        </a>
 
         <Button
           variant={currentView === 'main' ? 'default' : 'outline'}

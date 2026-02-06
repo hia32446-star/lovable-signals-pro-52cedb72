@@ -50,6 +50,7 @@ export const ActivityLog = ({ logs }: ActivityLogProps) => {
     }
   };
 
+
   return (
     <div className="glass-panel p-4 h-[280px] flex flex-col">
       <div className="flex items-center gap-2 mb-3">

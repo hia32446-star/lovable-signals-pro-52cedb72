@@ -79,6 +79,9 @@ export const useTradingBot = (activePairs: CurrencyPair[], telegramConfig: Teleg
     const basePrice = 1.0 + Math.random() * 50;
     const price = basePrice.toFixed(4);
     
+    // Escape underscores for Telegram Markdown
+    const esc = (s: string) => s.replace(/_/g, '\\_');
+    
     let message = '';
     if (!isResult) {
       const pStats = currentPairStats || { wins: 0, losses: 0 };
@@ -88,7 +91,7 @@ export const useTradingBot = (activePairs: CurrencyPair[], telegramConfig: Teleg
       
       message = `🏆 ==== TR TALHA PRO ==== 🏆
 
-🌐 ${displayPair}
+🌐 ${esc(displayPair)}
 ⏰ ${time}
 ⏱ M1
 ${directionEmoji} ${signal.direction}
@@ -146,7 +149,7 @@ ${directionEmoji} ${signal.direction}
       
       message = `=========== RESULT ============
 
-🏆 ${displayPair}
+🏆 ${esc(displayPair)}
 ⏰ ${time}
 
 ${resultEmoji} ${resultText}

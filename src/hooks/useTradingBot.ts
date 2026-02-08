@@ -308,19 +308,15 @@ ${signal.status === 'mtg' ? `🔄 MTG Step: ${signal.mtgStep}/3\n` : ''}
       return;
     }
 
-    // Check MTG state
+    // Skip this pair if it's in an active MTG sequence (handled by generateMtgSignal)
     const mtgState = mtgStateRef.current.get(pair.symbol);
-    let mtgStep = 0;
+    if (mtgState && mtgState.step > 0) {
+      addLog('info', `Skipping ${pair.symbol} — MTG recovery in progress (step ${mtgState.step}/3)`);
+      return;
+    }
+
     let direction = analysis.direction;
     let strategy = analysis.strategy;
-    
-    if (mtgState && mtgState.step > 0 && mtgState.step < 3) {
-      // Continue MTG sequence
-      direction = mtgState.lastDirection;
-      mtgStep = mtgState.step + 1;
-      strategy = 'MTG Profit Recovery';
-      addLog('mtg', `MTG Step ${mtgStep}/3 for ${pair.symbol}`);
-    }
 
     // Entry time is 1 minute from now (signal sent 1 minute before trade)
     const entryTime = new Date(Date.now() + 60000);
@@ -333,7 +329,7 @@ ${signal.status === 'mtg' ? `🔄 MTG Step: ${signal.mtgStep}/3\n` : ''}
       confidence: analysis.confidence,
       strategy,
       status: 'active',
-      mtgStep,
+      mtgStep: 0,
       openPrice: analysis.liveData?.entryPrice || analysis.marketData.currentPrice,
     };
 
@@ -382,9 +378,69 @@ ${signal.status === 'mtg' ? `🔄 MTG Step: ${signal.mtgStep}/3\n` : ''}
     }));
   }, [activePairs, analyzeMarket, addLog, sendToTelegram, pairStats]);
 
+  // Generate an MTG recovery signal for a specific pair and direction
+  const generateMtgSignal = useCallback(async (pair: CurrencyPair, mtgStep: number, direction: SignalDirection) => {
+    const entryTime = new Date(Date.now() + 60000);
+
+    // Fetch market data for price info
+    let currentPrice = 1.0 + Math.random() * 50;
+    let liveData: LiveMarketData | null = null;
+    let dataSource: 'live' | 'simulated' = 'simulated';
+    let marketCandles: MarketCandle[] = [];
+
+    try {
+      liveData = await fetchMarketData(pair.symbol);
+      if (liveData && liveData.candles.length > 0) {
+        currentPrice = liveData.entryPrice || liveData.currentPrice;
+        dataSource = 'live';
+        marketCandles = liveData.candles.map((c, i) => ({
+          time: new Date(c.time || Date.now() - (liveData!.candles.length - i) * 60000),
+          open: c.open, high: c.high, low: c.low, close: c.close, volume: c.volume || 0,
+        }));
+        recordTradeEntry(generateId(), pair.symbol, direction, currentPrice, liveData);
+      }
+    } catch { /* use simulated */ }
+
+    const signal: Signal = {
+      id: generateId(),
+      pair: pair.symbol,
+      direction,
+      entryTime,
+      confidence: 95,
+      strategy: 'MTG Profit Recovery',
+      status: 'active',
+      mtgStep,
+      openPrice: currentPrice,
+    };
+
+    await saveSignal(signal, currentPrice, dataSource);
+    addLog('info', `💾 MTG signal saved (step ${mtgStep}/3)`);
+
+    // Track in session
+    const signalTime = entryTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+    sessionSignalsRef.current.push({
+      time: signalTime, pair: pair.symbol, direction,
+      marketType: getMarketType(pair.symbol), status: 'active',
+    });
+
+    setSignals(prev => [signal, ...prev].slice(0, 50));
+    addLog('signal', `🔄 MTG Signal ${mtgStep}/3: ${pair.symbol} ${direction}`);
+
+    const currentPairStats = pairStats.get(pair.symbol) || { wins: 0, losses: 0 };
+    sendToTelegram(signal, false, currentPairStats, undefined, marketCandles);
+
+    // Resolve after 2 minutes
+    setTimeout(() => resolveSignal(signal, dataSource), 120000);
+
+    setStats(prev => ({
+      ...prev,
+      totalSignals: prev.totalSignals + 1,
+      activeSignals: prev.activeSignals + 1,
+    }));
+  }, [addLog, sendToTelegram, pairStats]);
+
   const resolveSignal = useCallback(async (signal: Signal, initialDataSource: 'live' | 'simulated' = 'simulated') => {
     // Try to validate with real market data using candle direction comparison
-    // This follows the Python bot's accurate validation logic
     let isWin: boolean;
     let entryPrice = signal.openPrice || 0;
     let exitPrice = 0;
@@ -435,13 +491,23 @@ ${signal.status === 'mtg' ? `🔄 MTG Step: ${signal.mtgStep}/3\n` : ''}
     // MTG logic determination (follows Python bot's martingale system)
     if (!isWin && mtgStep < 3) {
       // Start or continue MTG sequence — NOT a final result yet
+      const nextMtgStep = mtgStep + 1;
       mtgStateRef.current.set(signal.pair, {
-        step: mtgStep + 1,
+        step: nextMtgStep,
         lastDirection: signal.direction,
       });
       newStatus = 'mtg_pending'; // Intermediate loss, waiting for MTG recovery
       isFinalResult = false;
-      addLog('mtg', `🔄 MTG triggered for ${signal.pair} — advancing to step ${mtgStep + 1}/3`);
+      addLog('mtg', `🔄 MTG triggered for ${signal.pair} — advancing to step ${nextMtgStep}/3`);
+
+      // Automatically schedule the MTG recovery trade for the SAME pair
+      const mtgPair = activePairs.find(p => p.symbol === signal.pair);
+      if (mtgPair) {
+        setTimeout(() => {
+          addLog('info', `⏳ Starting MTG Step ${nextMtgStep}/3 for ${signal.pair}...`);
+          generateMtgSignal(mtgPair, nextMtgStep, signal.direction);
+        }, 10000); // 10 seconds before retrying MTG
+      }
     } else if (!isWin && mtgStep >= 3) {
       // All MTG levels exhausted — FINAL LOSS
       newStatus = 'loss';
@@ -559,7 +625,7 @@ ${signal.status === 'mtg' ? `🔄 MTG Step: ${signal.mtgStep}/3\n` : ''}
         activeSignals: Math.max(0, prev.activeSignals - 1),
       }));
     }
-  }, [addLog, sendToTelegram]);
+  }, [addLog, sendToTelegram, generateMtgSignal, activePairs]);
 
   const startBot = useCallback(() => {
     if (isRunning) return;

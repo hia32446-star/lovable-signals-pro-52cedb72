@@ -4,6 +4,7 @@ import { generateChartImage, blobToBase64 } from '@/utils/chartImageGenerator';
 import { generateRealtimeCandles, MarketCandle } from '@/utils/marketSimulator';
 import { analyzeMarketAdvanced } from '@/utils/technicalAnalysis';
 import { fetchMarketData, recordTradeEntry, validateTradeResult, LiveMarketData, convertToChartCandles } from '@/utils/marketApi';
+import { realMarketPairs, otcMarketPairs } from '@/data/currencyPairs';
 import { 
   saveSignal, 
   updateSignalResult, 
@@ -15,6 +16,19 @@ import {
   countActiveSignals,
   getPairStats as getDbPairStats,
 } from '@/services/signalTrackingService';
+
+interface SessionSignal {
+  time: string; // HH:MM format
+  pair: string;
+  direction: SignalDirection;
+  marketType: 'real' | 'otc';
+  status: 'active' | 'win' | 'loss' | 'mtg' | 'mtg_pending';
+}
+
+const getMarketType = (symbol: string): 'real' | 'otc' => {
+  const isReal = realMarketPairs.some(p => p.symbol === symbol);
+  return isReal ? 'real' : 'otc';
+};
 
 const generateId = () => Math.random().toString(36).substr(2, 9);
 
@@ -35,6 +49,7 @@ export const useTradingBot = (activePairs: CurrencyPair[], telegramConfig: Teleg
   const [activityLog, setActivityLog] = useState<ActivityLog[]>([]);
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
   const mtgStateRef = useRef<Map<string, { step: number; lastDirection: SignalDirection }>>(new Map());
+  const sessionSignalsRef = useRef<SessionSignal[]>([]);
 
   const addLog = useCallback((type: ActivityLog['type'], message: string) => {
     const log: ActivityLog = {
@@ -337,6 +352,16 @@ ${signal.status === 'mtg' ? `🔄 MTG Step: ${signal.mtgStep}/3\n` : ''}
       addLog('info', `💾 Signal saved to database (${dataSource})`);
     }
 
+    // Track signal in current session
+    const signalTime = new Date(signal.entryTime).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+    sessionSignalsRef.current.push({
+      time: signalTime,
+      pair: pair.symbol,
+      direction,
+      marketType: getMarketType(pair.symbol),
+      status: 'active',
+    });
+
     setSignals(prev => [signal, ...prev].slice(0, 50));
     addLog('signal', `🎯 Signal Generated: ${pair.symbol} ${direction} (${analysis.confidence}%)`);
     addLog('info', `⏰ Entry in 1 minute - Based on ${strategy}`);
@@ -458,6 +483,14 @@ ${signal.status === 'mtg' ? `🔄 MTG Step: ${signal.mtgStep}/3\n` : ''}
 
     // Only update stats and send result to Telegram on FINAL results
     if (isFinalResult) {
+      // Update session signal with final status
+      const sessionIdx = sessionSignalsRef.current.findIndex(
+        s => s.pair === signal.pair && s.status === 'active'
+      );
+      if (sessionIdx !== -1) {
+        sessionSignalsRef.current[sessionIdx].status = newStatus;
+      }
+
       // Update database stats
       if (newStatus === 'win' || newStatus === 'loss' || newStatus === 'mtg') {
         await updateDailyStats(newStatus);
@@ -531,6 +564,9 @@ ${signal.status === 'mtg' ? `🔄 MTG Step: ${signal.mtgStep}/3\n` : ''}
   const startBot = useCallback(() => {
     if (isRunning) return;
     
+    // Clear session signals for the new session
+    sessionSignalsRef.current = [];
+    
     setIsRunning(true);
     addLog('info', 'Bot Started');
     addLog('info', 'Strategy Engine ready');
@@ -555,14 +591,95 @@ ${signal.status === 'mtg' ? `🔄 MTG Step: ${signal.mtgStep}/3\n` : ''}
     }, 5000);
   }, [isRunning, addLog, generateSignal]);
 
+  const sendFinalSummary = useCallback(async () => {
+    if (!telegramConfig.isEnabled || !telegramConfig.botToken || !telegramConfig.chatId) return;
+
+    const esc = (s: string) => s.replace(/_/g, '\\_');
+    const sessionSignals = sessionSignalsRef.current;
+
+    // Only include resolved signals (win/loss/mtg)
+    const resolvedSignals = sessionSignals.filter(
+      s => s.status === 'win' || s.status === 'loss' || s.status === 'mtg'
+    );
+
+    const realTrades = resolvedSignals.filter(s => s.marketType === 'real');
+    const otcTrades = resolvedSignals.filter(s => s.marketType === 'otc');
+
+    const getResultIcon = (status: string) => {
+      if (status === 'win' || status === 'mtg') return '✅';
+      return '❌';
+    };
+
+    const formatTradeLines = (trades: SessionSignal[]) => {
+      if (trades.length === 0) return 'No trades';
+      return trades
+        .map(t => `${t.time} – ${esc(t.pair)} – ${t.direction} ${getResultIcon(t.status)}`)
+        .join('\n');
+    };
+
+    const totalTrades = resolvedSignals.length;
+    const totalWins = resolvedSignals.filter(s => s.status === 'win' || s.status === 'mtg').length;
+    const totalLosses = resolvedSignals.filter(s => s.status === 'loss').length;
+    const winRate = totalTrades > 0 ? Math.round((totalWins / totalTrades) * 100) : 0;
+
+    const now = new Date();
+    const dateStr = `${now.getFullYear()}.${String(now.getMonth() + 1).padStart(2, '0')}.${String(now.getDate()).padStart(2, '0')}`;
+
+    const message = `✖──‼️ P•A•R•T•I•A•L ‼️──✖
+
+━━━━━━━━━━━━━━━━
+📅  DATE : ${dateStr}
+━━━━━━━━━━━━━━━━
+
+📊 REAL MARKET
+━━━━━━━━━━━━━━━━
+${formatTradeLines(realTrades)}
+━━━━━━━━━━━━━━━━
+
+📈 OTC MARKET
+━━━━━━━━━━━━━━━━
+${formatTradeLines(otcTrades)}
+━━━━━━━━━━━━━━━━
+
+📊 TOTAL RESULT
+━━━━━━━━━━━━━━━━
+📈 Total Trades : ${totalTrades}
+✅ Win : ${totalWins}
+❌ Loss : ${totalLosses}
+🔥 Win Rate : ${winRate}%
+━━━━━━━━━━━━━━━━
+
+⚙️ TR TALHA PRO VERSION
+
+✖──‼️ Q U O T E X ‼️──✖`;
+
+    try {
+      await fetch(`https://api.telegram.org/bot${telegramConfig.botToken}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: telegramConfig.chatId,
+          text: message,
+        }),
+      });
+      addLog('info', '📊 Final result summary sent to Telegram');
+    } catch (error) {
+      addLog('error', `Failed to send final summary: ${error}`);
+    }
+  }, [telegramConfig, addLog]);
+
   const stopBot = useCallback(() => {
     setIsRunning(false);
     if (intervalRef.current) {
       clearTimeout(intervalRef.current);
       intervalRef.current = null;
     }
+    
+    // Send final result summary to Telegram
+    sendFinalSummary();
+    
     addLog('info', 'Bot Stopped');
-  }, [addLog]);
+  }, [addLog, sendFinalSummary]);
 
   // Load persisted stats on mount
   useEffect(() => {

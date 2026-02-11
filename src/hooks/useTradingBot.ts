@@ -168,7 +168,7 @@ ${directionEmoji} ${signal.direction}
 ⏰ ${time}
 
 ${resultEmoji} ${resultText}
-${signal.status === 'mtg' ? `🔄 MTG Step: ${signal.mtgStep}/3\n` : ''}
+${signal.status === 'mtg' ? `🔄 MTG Step: ${signal.mtgStep}/1\n` : ''}
 🎰 Win: ${totalWins} | Loss: ${statsToUse.losses} (${overallWinRate}%)
 🇲🇴 Esse par: ${pStats.wins}x${pStats.losses} (${pairWinRate}%)`;
     }
@@ -311,7 +311,7 @@ ${signal.status === 'mtg' ? `🔄 MTG Step: ${signal.mtgStep}/3\n` : ''}
     // Skip this pair if it's in an active MTG sequence (handled by generateMtgSignal)
     const mtgState = mtgStateRef.current.get(pair.symbol);
     if (mtgState && mtgState.step > 0) {
-      addLog('info', `Skipping ${pair.symbol} — MTG recovery in progress (step ${mtgState.step}/3)`);
+      addLog('info', `Skipping ${pair.symbol} — MTG recovery in progress (step ${mtgState.step}/1)`);
       return;
     }
 
@@ -414,7 +414,7 @@ ${signal.status === 'mtg' ? `🔄 MTG Step: ${signal.mtgStep}/3\n` : ''}
     };
 
     await saveSignal(signal, currentPrice, dataSource);
-    addLog('info', `💾 MTG signal saved (step ${mtgStep}/3)`);
+    addLog('info', `💾 MTG signal saved (step ${mtgStep}/1)`);
 
     // Track in session
     const signalTime = entryTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
@@ -424,7 +424,7 @@ ${signal.status === 'mtg' ? `🔄 MTG Step: ${signal.mtgStep}/3\n` : ''}
     });
 
     setSignals(prev => [signal, ...prev].slice(0, 50));
-    addLog('signal', `🔄 MTG Signal ${mtgStep}/3: ${pair.symbol} ${direction}`);
+    addLog('signal', `🔄 MTG Signal ${mtgStep}/1: ${pair.symbol} ${direction}`);
 
     const currentPairStats = pairStats.get(pair.symbol) || { wins: 0, losses: 0 };
     sendToTelegram(signal, false, currentPairStats, undefined, marketCandles);
@@ -489,38 +489,38 @@ ${signal.status === 'mtg' ? `🔄 MTG Step: ${signal.mtgStep}/3\n` : ''}
     let isFinalResult = true;
     
     // MTG logic determination (follows Python bot's martingale system)
-    if (!isWin && mtgStep < 3) {
-      // Start or continue MTG sequence — NOT a final result yet
-      const nextMtgStep = mtgStep + 1;
+    if (!isWin && mtgStep < 1) {
+      // First trade lost — trigger 1 MTG recovery trade
+      const nextMtgStep = 1;
       mtgStateRef.current.set(signal.pair, {
         step: nextMtgStep,
         lastDirection: signal.direction,
       });
       newStatus = 'mtg_pending'; // Intermediate loss, waiting for MTG recovery
       isFinalResult = false;
-      addLog('mtg', `🔄 MTG triggered for ${signal.pair} — advancing to step ${nextMtgStep}/3`);
+      addLog('mtg', `🔄 MTG triggered for ${signal.pair} — recovery step 1/1`);
 
       // Automatically schedule the MTG recovery trade for the SAME pair
       const mtgPair = activePairs.find(p => p.symbol === signal.pair);
       if (mtgPair) {
         setTimeout(() => {
-          addLog('info', `⏳ Starting MTG Step ${nextMtgStep}/3 for ${signal.pair}...`);
+          addLog('info', `⏳ Starting MTG Step 1/1 for ${signal.pair}...`);
           generateMtgSignal(mtgPair, nextMtgStep, signal.direction);
         }, 10000); // 10 seconds before retrying MTG
       }
-    } else if (!isWin && mtgStep >= 3) {
-      // All MTG levels exhausted — FINAL LOSS
+    } else if (!isWin && mtgStep >= 1) {
+      // MTG recovery also failed — FINAL LOSS
       newStatus = 'loss';
       mtgStateRef.current.delete(signal.pair);
       isFinalResult = true;
-      addLog('loss', `💀 All MTG levels failed for ${signal.pair} — FINAL LOSS`);
+      addLog('loss', `💀 MTG recovery failed for ${signal.pair} — FINAL LOSS`);
     } else if (isWin && mtgStep > 0) {
       // MTG win - recovered through martingale
       newStatus = 'mtg';
       mtgStateRef.current.delete(signal.pair);
       isFinalResult = true;
     } else if (isWin) {
-      // Regular win
+      // Normal win on first trade
       newStatus = 'win';
       mtgStateRef.current.delete(signal.pair);
       isFinalResult = true;
@@ -608,7 +608,7 @@ ${signal.status === 'mtg' ? `🔄 MTG Step: ${signal.mtgStep}/3\n` : ''}
       if (newStatus === 'win') {
         addLog('win', `✅ NORMAL WIN: ${signal.pair}${priceInfo}`);
       } else if (newStatus === 'mtg') {
-        addLog('win', `🔄 MTG WIN: ${signal.pair} (Step ${mtgStep}/3)${priceInfo}`);
+        addLog('win', `🔄 MTG WIN: ${signal.pair} (Step ${mtgStep}/1)${priceInfo}`);
       } else {
         addLog('loss', `❌ FINAL LOSS: ${signal.pair} (all MTG levels failed)${priceInfo}`);
       }

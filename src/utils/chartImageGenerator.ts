@@ -11,18 +11,19 @@
    close: number;
  }
  
- interface ChartConfig {
-   pair: string;
-   direction: 'CALL' | 'PUT';
-   price: string;
-   time: string;
-   entryTime: Date;
-   candles?: MarketCandle[] | ChartCandle[];
-   isRealData?: boolean;
-   showPatterns?: boolean;
-   showIndicators?: boolean;
-   detectedPatterns?: PatternResult[];
- }
+interface ChartConfig {
+  pair: string;
+  direction: 'CALL' | 'PUT';
+  price: string;
+  time: string;
+  entryTime: Date;
+  candles?: MarketCandle[] | ChartCandle[];
+  isRealData?: boolean;
+  showPatterns?: boolean;
+  showIndicators?: boolean;
+  detectedPatterns?: PatternResult[];
+  result?: 'WIN' | 'MTG_WIN' | 'LOSS' | 'DOJI';
+}
  
  interface ChartGenerationResult {
    blob: Blob;
@@ -132,312 +133,293 @@
    };
  };
  
- export const generateChartImage = async (config: ChartConfig): Promise<Blob> => {
-   const width = 1100;
-   const height = 600;
-   
-   const canvas = document.createElement('canvas');
-   canvas.width = width;
-   canvas.height = height;
-   const ctx = canvas.getContext('2d')!;
-   
-   // Dark gradient background
-   ctx.fillStyle = '#000000';
-   ctx.fillRect(0, 0, width, height);
-   
-   const bgGradient = ctx.createLinearGradient(0, 0, 0, height);
-   bgGradient.addColorStop(0, 'rgba(20, 20, 40, 0.3)');
-   bgGradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
-   ctx.fillStyle = bgGradient;
-   ctx.fillRect(0, 0, width, height);
-   
-   const pairConfig = getPairConfig(config.pair);
-   const candles = config.candles || generateRealtimeCandles(config.pair, 35, config.entryTime, config.direction).candles;
-   
-   const allPrices = candles.flatMap(c => [c.high, c.low]);
-   const minPrice = Math.min(...allPrices);
-   const maxPrice = Math.max(...allPrices);
-   const priceRange = maxPrice - minPrice;
-   const pricePadding = priceRange * 0.15;
-   const chartMinPrice = minPrice - pricePadding;
-   const chartMaxPrice = maxPrice + pricePadding * 2;
-   const chartPriceRange = chartMaxPrice - chartMinPrice;
-   
-   const chartLeft = 80;
-   const chartRight = width - 60;
-   const chartTop = 65;
-   const chartBottom = height - 60;
-   const chartWidth = chartRight - chartLeft;
-   const chartHeight = chartBottom - chartTop;
-   
-   const candleSpacing = chartWidth / candles.length;
-   const candleWidth = candleSpacing * 0.7;
-   
-   const xScale = (i: number) => chartLeft + (i + 0.5) * candleSpacing;
-   const yScale = (price: number) => chartTop + ((chartMaxPrice - price) / chartPriceRange) * chartHeight;
-   
-   // Draw grid lines
-   ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
-   ctx.lineWidth = 0.5;
-   for (let i = 0; i <= 5; i++) {
-     const y = chartTop + (i / 5) * chartHeight;
-     ctx.beginPath();
-     ctx.moveTo(chartLeft, y);
-     ctx.lineTo(chartRight, y);
-     ctx.stroke();
-   }
-   
-   // Draw Moving Averages
-   if (config.showIndicators !== false) {
-     const ma10 = calculateSMA(candles as ChartCandle[], 10);
-     const ma20 = calculateSMA(candles as ChartCandle[], 20);
-     
-     // MA10 (orange)
-     ctx.strokeStyle = '#ff9800';
-     ctx.lineWidth = 1.5;
-     ctx.beginPath();
-     let started = false;
-     for (let i = 0; i < ma10.length; i++) {
-       if (!isNaN(ma10[i])) {
-         const x = xScale(i);
-         const y = yScale(ma10[i]);
-         if (!started) { ctx.moveTo(x, y); started = true; } 
-         else { ctx.lineTo(x, y); }
-       }
-     }
-     ctx.stroke();
-     
-     // MA20 (blue)
-     ctx.strokeStyle = '#2196f3';
-     ctx.lineWidth = 1.5;
-     ctx.beginPath();
-     started = false;
-     for (let i = 0; i < ma20.length; i++) {
-       if (!isNaN(ma20[i])) {
-         const x = xScale(i);
-         const y = yScale(ma20[i]);
-         if (!started) { ctx.moveTo(x, y); started = true; } 
-         else { ctx.lineTo(x, y); }
-       }
-     }
-     ctx.stroke();
-   }
-   
-   // Title with data source indicator
-   const marketType = config.pair.includes('OTC') || config.pair.includes('_otc') ? '(OTC)' : '';
-   const pairName = config.pair.replace(' (OTC)', '').replace('-OTC', '').replace('_otc', '');
-   const dataSource = config.isRealData ? '🔴 LIVE' : '📊 SIM';
-   const titleText = `${pairName} ${marketType} - ${config.direction} ${dataSource}`.trim();
-   
-   ctx.fillStyle = '#ffffff';
-   ctx.font = 'bold 22px Arial, sans-serif';
-   ctx.textAlign = 'center';
-   ctx.fillText(titleText, width / 2, 30);
-   
-   // Pattern label
-   if (config.detectedPatterns && config.detectedPatterns.length > 0) {
-     const primaryPattern = config.detectedPatterns[0];
-     ctx.fillStyle = primaryPattern.direction === 'CALL' ? '#00ff00' : '#ff4444';
-     ctx.font = 'bold 14px Arial, sans-serif';
-     ctx.fillText(`Pattern: ${primaryPattern.pattern} (${Math.round(primaryPattern.confidence * 100)}%)`, width / 2, 52);
-   }
-   
-   // Draw candles
-   candles.forEach((candle, i) => {
-     const x = xScale(i);
-     const isGreen = candle.close >= candle.open;
-     const color = isGreen ? '#00ff00' : '#ff0000';
-     
-     ctx.strokeStyle = color;
-     ctx.lineWidth = 1.5;
-     ctx.beginPath();
-     ctx.moveTo(x, yScale(candle.high));
-     ctx.lineTo(x, yScale(candle.low));
-     ctx.stroke();
-     
-     ctx.fillStyle = color;
-     const bodyTop = yScale(Math.max(candle.open, candle.close));
-     const bodyBottom = yScale(Math.min(candle.open, candle.close));
-     const bodyHeight = Math.max(2, bodyBottom - bodyTop);
-     ctx.fillRect(x - candleWidth / 2, bodyTop, candleWidth, bodyHeight);
-   });
-   
-   // Pattern markers
-   if (config.showPatterns !== false && config.detectedPatterns && config.detectedPatterns.length > 0) {
-     config.detectedPatterns.forEach(pattern => {
-       const patternTime = pattern.timestamp.getTime();
-       const candleIdx = candles.findIndex(c => {
-         const candleTime = c.time instanceof Date ? c.time.getTime() : c.time;
-         return Math.abs(candleTime - patternTime) < 60000;
-       });
-       
-       if (candleIdx >= 0 && candleIdx < candles.length) {
-         const x = xScale(candleIdx);
-         const candle = candles[candleIdx];
-         const y = pattern.direction === 'CALL' ? yScale(candle.low) + 15 : yScale(candle.high) - 15;
-         
-         ctx.fillStyle = pattern.direction === 'CALL' ? '#00ff00' : '#ff4444';
-         ctx.beginPath();
-         if (pattern.direction === 'CALL') {
-           ctx.moveTo(x, y - 8);
-           ctx.lineTo(x - 5, y);
-           ctx.lineTo(x + 5, y);
-         } else {
-           ctx.moveTo(x, y + 8);
-           ctx.lineTo(x - 5, y);
-           ctx.lineTo(x + 5, y);
-         }
-         ctx.closePath();
-         ctx.fill();
-       }
-     });
-   }
-   
-   // Entry line
-   const lastCandle = candles[candles.length - 1];
-   const entryPrice = lastCandle.close;
-   const entryY = yScale(entryPrice);
-   
-   ctx.strokeStyle = '#ffd700';
-   ctx.setLineDash([8, 4]);
-   ctx.lineWidth = 1.5;
-   ctx.beginPath();
-   ctx.moveTo(chartLeft, entryY);
-   ctx.lineTo(chartRight, entryY);
-   ctx.stroke();
-   ctx.setLineDash([]);
-   
-   // Entry price label
-   ctx.fillStyle = '#ffd700';
-   ctx.font = 'bold 11px Arial, sans-serif';
-   ctx.textAlign = 'left';
-   ctx.fillText(`Entry: ${entryPrice.toFixed(pairConfig.decimals)}`, chartRight + 5, entryY + 4);
-   
-   // BUY/SELL arrow
-   const arrowX = xScale(candles.length - 1) + candleSpacing * 0.8;
-   const arrowColor = config.direction === 'CALL' ? '#00ff00' : '#ff0000';
-   const arrowLabel = config.direction === 'CALL' ? 'BUY' : 'SELL';
-   
-   ctx.fillStyle = arrowColor;
-   ctx.font = 'bold 14px Arial, sans-serif';
-   ctx.textAlign = 'center';
-   
-   if (config.direction === 'CALL') {
-     ctx.fillText(arrowLabel, arrowX, entryY - 35);
-     ctx.strokeStyle = arrowColor;
-     ctx.lineWidth = 2;
-     ctx.beginPath();
-     ctx.moveTo(arrowX, entryY - 30);
-     ctx.lineTo(arrowX, entryY - 8);
-     ctx.stroke();
-     ctx.beginPath();
-     ctx.moveTo(arrowX, entryY - 5);
-     ctx.lineTo(arrowX - 6, entryY - 12);
-     ctx.lineTo(arrowX + 6, entryY - 12);
-     ctx.closePath();
-     ctx.fill();
-   } else {
-     ctx.fillText(arrowLabel, arrowX, entryY + 45);
-     ctx.strokeStyle = arrowColor;
-     ctx.lineWidth = 2;
-     ctx.beginPath();
-     ctx.moveTo(arrowX, entryY + 30);
-     ctx.lineTo(arrowX, entryY + 8);
-     ctx.stroke();
-     ctx.beginPath();
-     ctx.moveTo(arrowX, entryY + 5);
-     ctx.lineTo(arrowX - 6, entryY + 12);
-     ctx.lineTo(arrowX + 6, entryY + 12);
-     ctx.closePath();
-     ctx.fill();
-   }
-   
-   // Price axis labels
-   ctx.fillStyle = '#ffffff';
-   ctx.font = '12px Arial, sans-serif';
-   ctx.textAlign = 'right';
-   
-   const priceSteps = 5;
-   const priceDecimals = pairConfig.decimals;
-   for (let i = 0; i <= priceSteps; i++) {
-     const price = chartMaxPrice - (i / priceSteps) * chartPriceRange;
-     const y = chartTop + (i / priceSteps) * chartHeight;
-     ctx.fillText(price.toFixed(priceDecimals) + ' -', chartLeft - 8, y + 4);
-   }
-   
-   // "Price" label
-   ctx.save();
-   ctx.translate(15, chartTop + chartHeight / 2);
-   ctx.rotate(-Math.PI / 2);
-   ctx.textAlign = 'center';
-   ctx.font = '12px Arial, sans-serif';
-   ctx.fillText('Price', 0, 0);
-   ctx.restore();
-   
-   // Time axis labels
-   ctx.textAlign = 'center';
-   ctx.font = '11px Arial, sans-serif';
-   
-   for (let i = 0; i < candles.length; i += 5) {
-     const candle = candles[i];
-     const x = xScale(i);
-     const candleTime = candle.time instanceof Date ? candle.time : new Date(candle.time);
-     const timeStr = candleTime.toLocaleTimeString('en-US', { 
-       hour: '2-digit', 
-       minute: '2-digit',
-       hour12: false 
-     });
-     ctx.fillText(timeStr, x, chartBottom + 20);
-   }
-   
-   ctx.fillText('Time (M1)', chartLeft + chartWidth / 2, chartBottom + 45);
-   
-   // Legend box
-   if (config.showIndicators !== false) {
-     ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-     ctx.fillRect(chartLeft + 10, chartTop + 10, 100, 45);
-     ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
-     ctx.strokeRect(chartLeft + 10, chartTop + 10, 100, 45);
-     
-     ctx.strokeStyle = '#ff9800';
-     ctx.lineWidth = 2;
-     ctx.beginPath();
-     ctx.moveTo(chartLeft + 20, chartTop + 25);
-     ctx.lineTo(chartLeft + 40, chartTop + 25);
-     ctx.stroke();
-     ctx.fillStyle = '#ffffff';
-     ctx.font = '11px Arial, sans-serif';
-     ctx.textAlign = 'left';
-     ctx.fillText('MA10', chartLeft + 45, chartTop + 29);
-     
-     ctx.strokeStyle = '#2196f3';
-     ctx.lineWidth = 2;
-     ctx.beginPath();
-     ctx.moveTo(chartLeft + 20, chartTop + 42);
-     ctx.lineTo(chartLeft + 40, chartTop + 42);
-     ctx.stroke();
-     ctx.fillStyle = '#ffffff';
-     ctx.fillText('MA20', chartLeft + 45, chartTop + 46);
-   }
-   
-   // Watermark
-   ctx.fillStyle = 'rgba(255, 255, 255, 0.15)';
-   ctx.font = 'bold 14px Arial, sans-serif';
-   ctx.textAlign = 'right';
-   ctx.fillText('TG: @TALHA_XYZ | TR TALHA PRO', width - 20, height - 15);
-   
-   // Data source indicator
-   ctx.fillStyle = config.isRealData ? '#00ff00' : '#ff9800';
-   ctx.font = 'bold 10px Arial, sans-serif';
-   ctx.textAlign = 'left';
-   ctx.fillText(config.isRealData ? '● LIVE DATA' : '○ SIMULATED', chartLeft + 10, height - 15);
-   
-   return new Promise((resolve) => {
-     canvas.toBlob((blob) => {
-       resolve(blob!);
-     }, 'image/png', 1.0);
-   });
- };
+const getDisplayName = (pair: string): string => {
+  return pair
+    .replace(/\s*\(OTC\)\s*/gi, '')
+    .replace(/-OTC/gi, '')
+    .replace(/_otc/gi, '')
+    .replace(/\//g, '')
+    .trim();
+};
+
+const getTradeTimeLabel = (config: ChartConfig): string => {
+  if (config.time) {
+    return config.time;
+  }
+
+  return config.entryTime.toLocaleTimeString('en-US', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+};
+
+const formatAxisTime = (time: Date | number): string => {
+  const candleTime = time instanceof Date ? time : new Date(time);
+  return candleTime.toLocaleTimeString('en-US', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+};
+
+const drawText = (
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  x: number,
+  y: number,
+  options: {
+    color?: string;
+    font?: string;
+    align?: CanvasTextAlign;
+    baseline?: CanvasTextBaseline;
+  } = {}
+) => {
+  ctx.fillStyle = options.color ?? '#ffffff';
+  ctx.font = options.font ?? '11px Arial, sans-serif';
+  ctx.textAlign = options.align ?? 'left';
+  ctx.textBaseline = options.baseline ?? 'alphabetic';
+  ctx.fillText(text, x, y);
+};
+
+export const generateChartImage = async (config: ChartConfig): Promise<Blob> => {
+  const width = 1200;
+  const height = 600;
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+
+  const ctx = canvas.getContext('2d');
+  if (!ctx) {
+    throw new Error('Canvas context not available');
+  }
+
+  const sourceCandles = config.candles || generateRealtimeCandles(config.pair, 40, config.entryTime, config.direction).candles;
+  const candles = sourceCandles.length >= 40 ? sourceCandles.slice(-40) : sourceCandles;
+
+  if (candles.length === 0) {
+    throw new Error('No candles available for chart generation');
+  }
+
+  const closes = candles.map((c) => c.close);
+  const highs = candles.map((c) => c.high);
+  const lows = candles.map((c) => c.low);
+
+  const minPrice = Math.min(...lows);
+  const maxPrice = Math.max(...highs);
+  const priceRange = Math.max(maxPrice - minPrice, closes[closes.length - 1] * 0.001);
+  const padding = priceRange * 0.08;
+  const chartMinPrice = minPrice - padding;
+  const chartMaxPrice = maxPrice + padding;
+  const chartRange = chartMaxPrice - chartMinPrice;
+
+  const marginLeft = 50;
+  const marginRight = 20;
+  const marginTop = 42;
+  const marginBottom = 42;
+  const chartLeft = marginLeft;
+  const chartTop = marginTop;
+  const chartWidth = width - marginLeft - marginRight;
+  const chartHeight = height - marginTop - marginBottom;
+  const chartRight = chartLeft + chartWidth;
+  const chartBottom = chartTop + chartHeight;
+
+  const xScale = (index: number) => chartLeft + (index / Math.max(candles.length - 1, 1)) * chartWidth;
+  const yScale = (price: number) => chartTop + ((chartMaxPrice - price) / chartRange) * chartHeight;
+  const candleStep = chartWidth / candles.length;
+  const candleWidth = candleStep * 0.7;
+
+  ctx.fillStyle = '#000000';
+  ctx.fillRect(0, 0, width, height);
+
+  ctx.strokeStyle = '#222222';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(chartLeft, chartTop, chartWidth, chartHeight);
+
+  const verticalGridCount = 8;
+  const horizontalGridCount = 6;
+
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
+  ctx.lineWidth = 0.6;
+
+  for (let i = 1; i < verticalGridCount; i++) {
+    const x = chartLeft + (i / verticalGridCount) * chartWidth;
+    ctx.beginPath();
+    ctx.moveTo(x, chartTop);
+    ctx.lineTo(x, chartBottom);
+    ctx.stroke();
+  }
+
+  for (let i = 1; i < horizontalGridCount; i++) {
+    const y = chartTop + (i / horizontalGridCount) * chartHeight;
+    ctx.beginPath();
+    ctx.moveTo(chartLeft, y);
+    ctx.lineTo(chartRight, y);
+    ctx.stroke();
+  }
+
+  candles.forEach((candle, index) => {
+    const bull = candle.close >= candle.open;
+    const color = bull ? '#00e676' : '#ff1744';
+    const x = xScale(index);
+    const openY = yScale(candle.open);
+    const closeY = yScale(candle.close);
+    const highY = yScale(candle.high);
+    const lowY = yScale(candle.low);
+    const bodyTop = Math.min(openY, closeY);
+    const rawBodyHeight = Math.abs(closeY - openY);
+    const minimumBodyHeight = Math.max(2, (lowY - highY) * 0.02);
+    const bodyHeight = Math.max(rawBodyHeight, minimumBodyHeight);
+
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(x, highY);
+    ctx.lineTo(x, lowY);
+    ctx.stroke();
+
+    ctx.fillStyle = color;
+    ctx.fillRect(x - candleWidth / 2, bodyTop, candleWidth, bodyHeight);
+  });
+
+  if (!config.result) {
+    const sigX = xScale(candles.length - 1);
+    const lastHigh = highs[highs.length - 1];
+    const lastLow = lows[lows.length - 1];
+    const range = (lastHigh - lastLow) || closes[closes.length - 1] * 0.001;
+
+    ctx.strokeStyle = config.direction === 'CALL' ? '#00e676' : '#ff1744';
+    ctx.fillStyle = ctx.strokeStyle;
+    ctx.lineWidth = 1.8;
+
+    if (config.direction === 'CALL') {
+      const targetY = yScale(lastLow);
+      const textY = yScale(lastLow - range * 0.18);
+
+      drawText(ctx, '▲ CALL', sigX, textY, {
+        color: '#00e676',
+        font: 'bold 11px Arial, sans-serif',
+        align: 'center',
+      });
+
+      ctx.beginPath();
+      ctx.moveTo(sigX, textY + 6);
+      ctx.lineTo(sigX, targetY - 6);
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.moveTo(sigX, targetY);
+      ctx.lineTo(sigX - 5, targetY - 8);
+      ctx.lineTo(sigX + 5, targetY - 8);
+      ctx.closePath();
+      ctx.fill();
+    } else {
+      const targetY = yScale(lastHigh);
+      const textY = yScale(lastHigh + range * 0.18);
+
+      drawText(ctx, '▼ PUT', sigX, textY, {
+        color: '#ff1744',
+        font: 'bold 11px Arial, sans-serif',
+        align: 'center',
+      });
+
+      ctx.beginPath();
+      ctx.moveTo(sigX, textY - 6);
+      ctx.lineTo(sigX, targetY + 6);
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.moveTo(sigX, targetY);
+      ctx.lineTo(sigX - 5, targetY + 8);
+      ctx.lineTo(sigX + 5, targetY + 8);
+      ctx.closePath();
+      ctx.fill();
+    }
+  }
+
+  if (config.result) {
+    const resultLabel = {
+      WIN: 'WIN',
+      MTG_WIN: 'MTG WIN',
+      LOSS: 'LOSS',
+      DOJI: 'DOJI',
+    }[config.result] ?? config.result;
+
+    const resultColor = {
+      WIN: '#00e676',
+      MTG_WIN: '#00e676',
+      LOSS: '#ff1744',
+      DOJI: '#FFC107',
+    }[config.result] ?? '#ffffff';
+
+    const text = resultLabel;
+    ctx.font = 'bold 15px Arial, sans-serif';
+    const metrics = ctx.measureText(text);
+    const boxWidth = metrics.width + 24;
+    const boxHeight = 34;
+    const boxX = width - boxWidth - 22;
+    const boxY = 22;
+
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.85)';
+    ctx.strokeStyle = resultColor;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.roundRect(boxX, boxY, boxWidth, boxHeight, 10);
+    ctx.fill();
+    ctx.stroke();
+
+    drawText(ctx, text, boxX + boxWidth - 12, boxY + 22, {
+      color: resultColor,
+      font: 'bold 15px Arial, sans-serif',
+      align: 'right',
+    });
+  }
+
+  const yTickCount = 6;
+  const pairConfig = getPairConfig(config.pair);
+  for (let i = 0; i < yTickCount; i++) {
+    const ratio = i / (yTickCount - 1);
+    const price = chartMaxPrice - ratio * chartRange;
+    const y = chartTop + ratio * chartHeight;
+    drawText(ctx, price.toFixed(pairConfig.decimals), chartLeft - 8, y + 4, {
+      color: '#666666',
+      font: '12px Arial, sans-serif',
+      align: 'right',
+    });
+  }
+
+  const step = Math.max(1, Math.floor(candles.length / 8));
+  for (let i = 0; i < candles.length; i += step) {
+    const x = xScale(i);
+    drawText(ctx, formatAxisTime(candles[i].time), x, chartBottom + 18, {
+      color: '#666666',
+      font: '12px Arial, sans-serif',
+      align: 'center',
+    });
+  }
+
+  ctx.strokeStyle = '#222222';
+  ['top', 'right', 'left', 'bottom'];
+
+  const title = `𝗡𝗲𝘂𝗿𝗼𝗧𝗿𝗮𝗱𝗲𝗫  |  ${getDisplayName(config.pair)}  M1  |  ${config.direction}  @  ${getTradeTimeLabel(config)}`;
+  drawText(ctx, title, width / 2, 18, {
+    color: '#ffffff',
+    font: 'bold 11px Arial, sans-serif',
+    align: 'center',
+    baseline: 'top',
+  });
+
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (!blob) {
+        reject(new Error('Failed to generate chart image blob'));
+        return;
+      }
+
+      resolve(blob);
+    }, 'image/png', 1);
+  });
+};
  
  export const blobToBase64 = (blob: Blob): Promise<string> => {
    return new Promise((resolve, reject) => {

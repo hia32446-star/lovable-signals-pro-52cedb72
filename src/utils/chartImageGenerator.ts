@@ -187,7 +187,11 @@ export const generateChartImage = async (config: ChartConfig): Promise<Blob> => 
   }
 
   const sourceCandles = config.candles || generateRealtimeCandles(config.pair, 40, config.entryTime, config.direction).candles;
-  const candles = sourceCandles.length >= 40 ? sourceCandles.slice(-40) : sourceCandles;
+  const candles = [...sourceCandles].slice(-40).sort((a, b) => {
+    const left = a.time instanceof Date ? a.time.getTime() : a.time;
+    const right = b.time instanceof Date ? b.time.getTime() : b.time;
+    return left - right;
+  });
 
   if (candles.length === 0) {
     throw new Error('No candles available for chart generation');
@@ -200,7 +204,7 @@ export const generateChartImage = async (config: ChartConfig): Promise<Blob> => 
   const minPrice = Math.min(...lows);
   const maxPrice = Math.max(...highs);
   const priceRange = Math.max(maxPrice - minPrice, closes[closes.length - 1] * 0.001);
-  const padding = priceRange * 0.08;
+  const padding = priceRange * 0.04;
   const chartMinPrice = minPrice - padding;
   const chartMaxPrice = maxPrice + padding;
   const chartRange = chartMaxPrice - chartMinPrice;

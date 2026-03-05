@@ -40,6 +40,35 @@ const safeParseJson = async (response: Response): Promise<any | null> => {
   }
 };
 
+const parseNumericValue = (value: unknown): number => {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : 0;
+  }
+
+  if (typeof value === 'string') {
+    const parsed = Number.parseFloat(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+
+  return 0;
+};
+
+const parseApiCandleTime = (value: unknown): number => {
+  if (typeof value === 'number') {
+    return value > 1_000_000_000_000 ? value : value * 1000;
+  }
+
+  if (typeof value === 'string') {
+    const normalized = value.includes('T') ? value : value.replace(' ', 'T');
+    const parsed = new Date(normalized).getTime();
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+
+  return Date.now();
+};
+
 // Convert pair symbol to API format (ensure _otc suffix)
 const formatSymbolForApi = (symbol: string): string => {
   // Clean the symbol first
@@ -134,30 +163,31 @@ export const fetchMarketData = async (symbol: string): Promise<LiveMarketData | 
     // Handle different API response formats
     let candles: MarketTick[] = [];
     let currentPrice = 0;
+
+    const mapApiCandle = (item: any): MarketTick => ({
+      time: parseApiCandleTime(item.candle_time ?? item.time ?? item.epoch ?? item.t),
+      open: parseNumericValue(item.open ?? item.o),
+      high: parseNumericValue(item.high ?? item.h),
+      low: parseNumericValue(item.low ?? item.l),
+      close: parseNumericValue(item.close ?? item.c),
+      volume: parseNumericValue(item.volume ?? item.v),
+    });
+
+    const normalizeCandles = (items: any[]): MarketTick[] => {
+      return items
+        .filter((item) => item && (item.pair === formattedSymbol || !item.pair))
+        .map(mapApiCandle)
+        .filter((candle) => candle.high >= candle.low && candle.open > 0 && candle.close > 0)
+        .sort((a, b) => a.time - b.time);
+    };
     
-    // New API format: { data: [{ pair, candle_time, open, high, low, close }] }
+    // New API format: { data: [{ pair, time, epoch, open, high, low, close }] }
     if (data?.data && Array.isArray(data.data)) {
-      candles = data.data
-        .filter((item: any) => item.pair === formattedSymbol || !item.pair) // Filter by pair if present
-        .map((item: any) => ({
-          time: item.candle_time ? new Date(item.candle_time).getTime() : (item.time || item.t || Date.now()),
-          open: parseFloat(item.open || item.o || 0),
-          high: parseFloat(item.high || item.h || 0),
-          low: parseFloat(item.low || item.l || 0),
-          close: parseFloat(item.close || item.c || 0),
-          volume: parseFloat(item.volume || item.v || 0),
-        }))
-        .sort((a: MarketTick, b: MarketTick) => a.time - b.time); // Sort oldest first
+      candles = normalizeCandles(data.data);
       currentPrice = candles.length > 0 ? candles[candles.length - 1].close : 0;
     } else if (Array.isArray(data)) {
-      candles = data.map((item: any) => ({
-        time: item.candle_time ? new Date(item.candle_time).getTime() : (item.time || item.t || Date.now()),
-        open: parseFloat(item.open || item.o || 0),
-        high: parseFloat(item.high || item.h || 0),
-        low: parseFloat(item.low || item.l || 0),
-        close: parseFloat(item.close || item.c || 0),
-        volume: parseFloat(item.volume || item.v || 0),
-      })).sort((a: MarketTick, b: MarketTick) => a.time - b.time);
+      candles = normalizeCandles(data);
+      currentPrice = candles.length > 0 ? candles[candles.length - 1].close : 0;
       currentPrice = candles.length > 0 ? candles[candles.length - 1].close : 0;
     } else if (data.price || data.currentPrice) {
       currentPrice = parseFloat(data.price || data.currentPrice);

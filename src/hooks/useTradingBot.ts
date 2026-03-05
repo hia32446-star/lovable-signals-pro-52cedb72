@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { Signal, TradingStats, ActivityLog, CurrencyPair, TelegramConfig, SignalDirection, PairStats } from '@/types/trading';
 import { generateChartImage, blobToBase64, generateChartWithRealData } from '@/utils/chartImageGenerator';
-import { MarketCandle } from '@/utils/marketSimulator';
+import { generateRealtimeCandles, MarketCandle } from '@/utils/marketSimulator';
 import { analyzeMarketAdvanced } from '@/utils/technicalAnalysis';
 import { fetchMarketData, recordTradeEntry, validateTradeResult, LiveMarketData, convertToChartCandles } from '@/utils/marketApi';
 import { realMarketPairs, otcMarketPairs } from '@/data/currencyPairs';

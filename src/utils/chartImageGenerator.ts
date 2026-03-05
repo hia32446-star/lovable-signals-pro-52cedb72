@@ -92,46 +92,38 @@ interface ChartConfig {
  };
  
  // Generate chart with real API data (preferred) or fall back to simulation
- export const generateChartWithRealData = async (config: ChartConfig): Promise<ChartGenerationResult> => {
-   const { pair, direction, entryTime } = config;
-   
-   const realData = await fetchRealTimeCandles(pair, 35);
-   
-   let candles: ChartCandle[];
-   let detectedPatterns: PatternResult[] = [];
-   let usedRealData = false;
-   let currentPrice = 0;
-   
-   if (realData && realData.candles.length >= 10) {
-     candles = realData.candles;
-     detectedPatterns = realData.patterns;
-     currentPrice = realData.currentPrice;
-     usedRealData = true;
-     console.log(`Using real market data for ${pair} chart (${candles.length} candles)`);
-   } else {
-     const simulated = generateRealtimeCandles(pair, 35, entryTime, direction);
-     candles = simulated.candles;
-     currentPrice = simulated.candles[simulated.candles.length - 1].close;
-     console.log(`Using simulated data for ${pair} chart`);
-   }
-   
-   const blob = await generateChartImage({
-     ...config,
-     candles,
-     isRealData: usedRealData,
-     showPatterns: true,
-     showIndicators: true,
-     detectedPatterns,
-   });
-   
-   return {
-     blob,
-     usedRealData,
-     candleCount: candles.length,
-     detectedPatterns,
-     currentPrice,
-   };
- };
+export const generateChartWithRealData = async (config: ChartConfig): Promise<ChartGenerationResult> => {
+  const { pair } = config;
+
+  const realData = await fetchRealTimeCandles(pair, 40);
+
+  if (!realData || realData.candles.length < 10) {
+    throw new Error(`Live market data unavailable for ${pair}`);
+  }
+
+  const candles = realData.candles;
+  const detectedPatterns = realData.patterns;
+  const currentPrice = realData.currentPrice;
+
+  console.log(`Using real market data for ${pair} chart (${candles.length} candles)`);
+
+  const blob = await generateChartImage({
+    ...config,
+    candles,
+    isRealData: true,
+    showPatterns: true,
+    showIndicators: true,
+    detectedPatterns,
+  });
+
+  return {
+    blob,
+    usedRealData: true,
+    candleCount: candles.length,
+    detectedPatterns,
+    currentPrice,
+  };
+};
  
 const getDisplayName = (pair: string): string => {
   return pair

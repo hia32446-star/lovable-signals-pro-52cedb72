@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { Signal, TradingStats, ActivityLog, CurrencyPair, TelegramConfig, SignalDirection, PairStats } from '@/types/trading';
-import { generateChartImage, blobToBase64 } from '@/utils/chartImageGenerator';
+import { generateChartImage, blobToBase64, generateChartWithRealData } from '@/utils/chartImageGenerator';
 import { generateRealtimeCandles, MarketCandle } from '@/utils/marketSimulator';
 import { analyzeMarketAdvanced } from '@/utils/technicalAnalysis';
 import { fetchMarketData, recordTradeEntry, validateTradeResult, LiveMarketData, convertToChartCandles } from '@/utils/marketApi';
@@ -115,18 +115,18 @@ ${directionEmoji} ${signal.direction}
 🎰 Current Pair: ${pStats.wins}x${pStats.losses} ·◈· (${pairWinRate}%)
 🇲🇴 Signal : ${formatDate(signal.entryTime)}`;
 
-      // Generate and send chart image for signals with real market data
+      // Generate and send chart image from live market data only
       try {
-        const chartBlob = await generateChartImage({
-          pair: displayPair,
+        const chartResult = await generateChartWithRealData({
+          pair: signal.pair,
           direction: signal.direction,
           price,
           time,
           entryTime: new Date(signal.entryTime),
-          candles: marketCandles, // Pass pre-analyzed market candles
         });
-        
-        const base64Image = await blobToBase64(chartBlob);
+
+        const chartBlob = chartResult.blob;
+        await blobToBase64(chartBlob);
         
         // Send photo with caption
         const formData = new FormData();
@@ -140,10 +140,10 @@ ${directionEmoji} ${signal.direction}
           body: formData,
         });
         
-        addLog('info', `Chart image sent to Telegram for ${signal.pair}`);
+        addLog('info', `Live chart image sent to Telegram for ${signal.pair}`);
         return;
       } catch (chartError) {
-        addLog('error', `Chart generation failed, sending text only: ${chartError}`);
+        addLog('error', `Live chart generation failed, sending text only: ${chartError}`);
         // Fall through to send text message
       }
 
